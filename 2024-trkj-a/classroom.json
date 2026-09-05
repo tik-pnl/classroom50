@@ -1,0 +1,25 @@
+{
+  "schema": "classroom50/classroom/v1",
+  "name": "2024 TRKJ A",
+  "short_name": "2024-trkj-a",
+  "term": "",
+  "org": "tik-pnl",
+  "team": {
+    "id": 19357315,
+    "slug": "classroom50-2024-trkj-a"
+  },
+  "teams": {
+    "teacher": {
+      "id": 19357316,
+      "slug": "classroom50-2024-trkj-a-teacher"
+    },
+    "hta": {
+      "id": 19357317,
+      "slug": "classroom50-2024-trkj-a-hta"
+    },
+    "ta": {
+      "id": 19357318,
+      "slug": "classroom50-2024-trkj-a-ta"
+    }
+  }
+}
