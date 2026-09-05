@@ -1,0 +1,154 @@
+name: Collect Scores
+
+# Teacher-triggered workflow (run it from the Actions tab or the web app's
+# "Sync now" button). Iterates
+# the (member, assignment) Cartesian product of the classroom GitHub teams'
+# members × <classroom>/assignments.json (the teams are authoritative for
+# enrollment; roster.csv is optional display metadata). The polled
+# members are the union of the STUDENT team and the STAFF teams
+# (teacher/hta/ta), so a staff member who accepted an assignment to test
+# the autograde flow is collected like a student; staff who never
+# accepted have no repo, hence no releases, hence no entry. It pages
+# through each expected `<classroom>-<assignment>-<username>` repo's
+# `submit/*` releases and downloads `result.json` from each. Single-writer
+# by design: no concurrent ingest, no per-student dispatch event, no broad
+# cross-repo write secret.
+
+# The run list shows only the workflow name by default, so a scoped collect
+# and an org-wide sweep look identical there. Spell the scope out in the run
+# title (and the job name below). Display names come from the optional
+# *_name inputs the web app sends alongside the slugs; a manual dispatch from
+# the Actions tab leaves them blank and gets the slugs. This can't be looked up
+# here: run-name is evaluated before any step, so there is no checkout to read
+# classroom.json / assignments.json from.
+run-name: >-
+  Collect scores:
+  ${{ github.event.inputs.assignment && format('{0} in {1}', github.event.inputs.assignment_name || github.event.inputs.assignment, github.event.inputs.classroom_name || github.event.inputs.classroom)
+  || github.event.inputs.classroom && format('every assignment in {0}', github.event.inputs.classroom_name || github.event.inputs.classroom)
+  || 'all classrooms' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      classroom:
+        description: "Classroom short-name (leave blank to collect all)"
+        required: false
+      assignment:
+        description: "Assignment slug (leave blank to collect the whole classroom; requires classroom to be meaningful)"
+        required: false
+      # Label-only: used in run-name and the job name, never by the collector.
+      classroom_name:
+        description: "Classroom display name for the run title (optional)"
+        required: false
+      assignment_name:
+        description: "Assignment display name for the run title (optional)"
+        required: false
+
+permissions:
+  contents: write       # write scores.json + commit
+
+# Serialize same-classroom runs (scoped or not); only runs for DIFFERENT
+# classrooms may overlap. An org-wide ('all') run still overlaps a scoped
+# run on the same scores.json, so on a push race the step below re-runs the
+# collector against the freshly-pulled tree (re-applying this run's per-owner
+# upserts onto the other run's already-committed entries) instead of a blind
+# text merge that could drop them.
+concurrency:
+  group: collect-${{ github.event.inputs.classroom || 'all' }}
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    # Same scope as run-name, so the run's sidebar and the checks list say
+    # what this job walked, not just "collect".
+    name: >-
+      Collect
+      ${{ github.event.inputs.assignment && format('{0} in {1}', github.event.inputs.assignment_name || github.event.inputs.assignment, github.event.inputs.classroom_name || github.event.inputs.classroom)
+      || github.event.inputs.classroom && format('every assignment in {0}', github.event.inputs.classroom_name || github.event.inputs.classroom)
+      || 'all classrooms' }}
+    runs-on: ubuntu-latest
+    # Bound the job: the commit/push retry below can loop, and with
+    # cancel-in-progress: false a wedged git operation would otherwise hold the
+    # same-classroom concurrency slot until GitHub's ~6h default, stalling every
+    # queued scoped/org-wide run behind it. Fail loudly instead.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+
+      - name: Collect scores
+        env:
+          # Fine-grained PAT. Needs Organization -> Members: Read
+          # (collection is team-driven and lists the classroom team's
+          # members), Repository -> Contents: Read and write on
+          # <classroom>-* student repos, and Repository ->
+          # Administration: Read and write (collection grants staff teams
+          # (e.g., TAs) read access to student repos and private
+          # templates via PUT teams/.../repos/...). Collection READS
+          # (team members, releases + result.json) and grants team access;
+          # the contents-write scope is shared with regrade.yaml, which
+          # pushes submit/* tags.
+          # Rotated via `gh teacher rotate-service-token <org>`.
+          CLASSROOM50_SERVICE_TOKEN: ${{ secrets.CLASSROOM50_SERVICE_TOKEN }}
+          # Optional restriction to a single classroom; empty
+          # means "collect all classrooms in this config repo".
+          CLASSROOM_FILTER: ${{ github.event.inputs.classroom || '' }}
+          # Optional further restriction to one assignment slug (the web app's
+          # per-assignment "Sync now"); empty means every assignment.
+          ASSIGNMENT_FILTER: ${{ github.event.inputs.assignment || '' }}
+        run: python3 .github/scripts/collect_scores.py
+
+      - name: Commit and push
+        env:
+          # Re-collection on a push race needs the same inputs as the step above.
+          CLASSROOM50_SERVICE_TOKEN: ${{ secrets.CLASSROOM50_SERVICE_TOKEN }}
+          CLASSROOM_FILTER: ${{ github.event.inputs.classroom || '' }}
+          ASSIGNMENT_FILTER: ${{ github.event.inputs.assignment || '' }}
+        run: |
+          set -euo pipefail
+          commit_scores() {
+            if [ -z "$(git status --porcelain '*/scores.json' 2>/dev/null)" ]; then
+              return 1  # nothing to commit
+            fi
+            git add '*/scores.json'
+            git -c user.name=classroom50-bot -c user.email=bot@classroom50 \
+                commit -m "[Classroom 50] collect: refresh scores.json"
+            return 0
+          }
+
+          if ! commit_scores; then
+            echo "no scores.json changes to commit"
+            exit 0
+          fi
+
+          # The branch can advance mid-run: a teacher edit, a collect for
+          # another classroom, or an org-wide run overlapping a scoped run
+          # on the SAME scores.json (the concurrency group only serializes
+          # same-classroom runs). On a push race, fast-forward to the remote tip
+          # and RE-RUN the collector: apply_updates upserts this run's entries
+          # per repo-owner onto whatever the other run already committed, so no
+          # entry is lost (unlike a text-level `-X theirs` merge, which favored
+          # our replayed commit and could discard the other run's newer entry).
+          # Re-collection is idempotent; the extra API cost is bounded to the
+          # rare contention case and the 3 attempts below.
+          for attempt in 1 2 3; do
+            if git push; then
+              exit 0
+            fi
+            echo "push rejected (attempt ${attempt}); re-collecting onto the remote tip"
+            # Drop our local commit, fast-forward to the remote, and re-run the
+            # collector against the now-current tree.
+            git reset --hard HEAD~1
+            git pull --ff-only
+            python3 .github/scripts/collect_scores.py
+            if ! commit_scores; then
+              # An idempotent re-collect produced no diff: the remote already
+              # carries equivalent data, so there is nothing left to push.
+              echo "re-collect produced no changes; remote already current"
+              exit 0
+            fi
+          done
+          git push

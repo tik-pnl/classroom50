@@ -1,0 +1,184 @@
+name: Publish Pages
+
+# Allow-list publisher: only the paths enumerated under "Assemble Pages
+# artifact" appear in the deployed site, so a new file dropped into the
+# repo is private by default. Triggers are intentionally limited to
+# push to the org default branch and workflow_dispatch (never
+# pull_request), so a fork PR cannot modify this workflow to leak
+# private paths. main is substituted at skeleton commit
+# time by `gh teacher init`.
+
+on:
+  push:
+    branches: ["main"]
+    # Skip the redeploy for roster-only commits: the roster isn't published.
+    paths-ignore:
+      - "**/roster.csv"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Assemble Pages artifact (allow-list)
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          shopt -s nullglob
+          # dest_prefix <classroom> -> the per-classroom site path:
+          # <classroom>/<secret> when classroom.json carries a (validated)
+          # secret, else plain <classroom>. python3 reads the JSON so a
+          # malformed classroom.json can't inject shell.
+          #
+          # Written ONCE to $RUNNER_TEMP and reused by the later "Bundle"
+          # step (run: blocks can't share a shell function) so the two steps
+          # can't drift and split a protected classroom's published tree.
+          mkdir -p "$RUNNER_TEMP"
+          cat > "$RUNNER_TEMP/dest_prefix.py" <<'PY'
+          import json, os, re, sys
+          classroom = sys.argv[1]
+          path = os.path.join(classroom, "classroom.json")
+          secret = ""
+          try:
+              with open(path) as fh:
+                  secret = (json.load(fh) or {}).get("secret") or ""
+          except (OSError, ValueError):
+              secret = ""
+          if secret and not re.fullmatch(r"[a-z0-9]{4,64}", secret):
+              print(f"::error::{path}: invalid secret (must be [a-z0-9]{{4,64}})", file=sys.stderr)
+              sys.exit(1)
+          print(f"{classroom}/{secret}" if secret else classroom)
+          PY
+          dest_prefix() {
+            python3 "$RUNNER_TEMP/dest_prefix.py" "$1"
+          }
+          # runner.py (org-level bootstrap) published at the site root
+          # so the autograde-runner workflow can fetch it from
+          #   https://<org>.github.io/classroom50/runner.py
+          # regardless of which classroom triggered the run.
+          if [ -f .github/scripts/runner.py ]; then
+            cp .github/scripts/runner.py _site/runner.py
+          fi
+          # ensure_feedback_pr.py (org-level): the autograde-runner's
+          # "Ensure Feedback PR" step fetches it from the site root the same
+          # way as runner.py. Guarded so an older skeleton still publishes
+          # everything else.
+          if [ -f .github/scripts/ensure_feedback_pr.py ]; then
+            cp .github/scripts/ensure_feedback_pr.py _site/ensure_feedback_pr.py
+          fi
+          # Per-classroom config files, published under the classroom's
+          # dest prefix (plain or secret-protected). classroom default
+          # autograder (`<classroom>/autograder.py`) is published only when
+          # the classroom has run `gh teacher autograder set-default`;
+          # absence is fine, the runner falls back to a vacuous-pass
+          # result when neither per-assignment nor classroom default
+          # is published.
+          for f in */classroom.json */assignments.json; do
+            classroom="$(dirname "$f")"
+            dest="$(dest_prefix "$classroom")"
+            mkdir -p "_site/$dest"
+            cp "$f" "_site/$dest/$(basename "$f")"
+          done
+          for f in */autograder.py; do
+            classroom="$(dirname "$f")"
+            dest="$(dest_prefix "$classroom")"
+            mkdir -p "_site/$dest"
+            cp "$f" "_site/$dest/$(basename "$f")"
+          done
+          # Non-default autograder workflow shims (the rare
+          # swap-the-runner-entirely case).
+          for f in */autograders/*.yaml; do
+            classroom="$(echo "$f" | cut -d/ -f1)"
+            dest="$(dest_prefix "$classroom")"
+            mkdir -p "_site/$dest/autograders"
+            cp "$f" "_site/$dest/autograders/$(basename "$f")"
+          done
+
+      - name: Materialize declarative tests
+        run: |
+          set -euo pipefail
+          # Translate each entry's `tests` block into
+          # <classroom>/autograders/<slug>/tests.json so the bundle step
+          # below tars it (with any sibling fixtures) for runner.py's
+          # interpreter. Must run BEFORE the bundle step. Guarded so an
+          # older skeleton still publishes everything else.
+          if [ -f .github/scripts/materialize_tests.py ]; then
+            python3 .github/scripts/materialize_tests.py
+          else
+            echo "::warning::.github/scripts/materialize_tests.py not found; skipping declarative-test materialization (re-run \`gh teacher init\` to update skeleton scripts)"
+          fi
+
+      - name: Bundle per-assignment autograders
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          # Reuse the dest-prefix resolver the assemble step wrote to
+          # $RUNNER_TEMP, so both steps share one copy of the secret/path rule.
+          dest_prefix() {
+            python3 "$RUNNER_TEMP/dest_prefix.py" "$1"
+          }
+          # Per-assignment override directories live at
+          # <classroom>/autograders/<slug>/ (autograder.py + any
+          # ancillary files: fixtures, helpers, framework configs, or a
+          # tests.json materialized from assignments.json above).
+          # Bundle each into <dest>/autograders/<slug>.tar.gz so
+          # runner.py fetches one tarball at runtime (instead of
+          # walking a directory listing Pages doesn't serve).
+          for slugdir in */autograders/*/; do
+            classroom=$(echo "$slugdir" | cut -d/ -f1)
+            slug=$(basename "$slugdir")
+            dest="$(dest_prefix "$classroom")"
+            outdir="_site/$dest/autograders"
+            mkdir -p "$outdir"
+            # `-C parent slug` so the tarball's internal layout is
+            # `<slug>/<files>`, matching the runtime extraction path
+            # runner.py uses to locate the per-assignment entrypoint.
+            tar -czf "$outdir/$slug.tar.gz" -C "$(dirname "$slugdir")" "$slug"
+          done
+
+      - name: Build classrooms index
+        run: |
+          python3 - <<'PY'
+          import glob, json, os
+          # Public fields only: keep internal/teacher-side keys (e.g., the
+          # `team` block, which carries the GitHub team id/slug) out of the
+          # unauthenticated Pages index. New public fields must be added
+          # here explicitly rather than dumping classroom.json wholesale.
+          # `active` is published so the student accept page can refuse an
+          # archived classroom (active:false); absent = active (legacy),
+          # matching configrepo.ClassroomJSON.IsArchived.
+          PUBLIC_KEYS = ("schema", "name", "short_name", "term", "org", "active", "migrated_from")
+          rooms = []
+          for path in sorted(glob.glob("*/classroom.json")):
+              with open(path) as fh:
+                  doc = json.load(fh)
+              rooms.append({k: doc[k] for k in PUBLIC_KEYS if k in doc})
+          os.makedirs("_site", exist_ok=True)
+          with open("_site/classrooms-index.json", "w") as fh:
+              json.dump({"classrooms": rooms}, fh)
+          PY
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
