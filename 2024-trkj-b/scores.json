@@ -23,6 +23,26 @@
               "tests": []
             }
           ]
+        },
+        {
+          "owner": "saidanhar",
+          "override": true,
+          "submissions": [
+            {
+              "schema": "classroom50/result/v1",
+              "classroom": "2024-trkj-b",
+              "assignment_type": "individual",
+              "owner": "saidanhar",
+              "submission": "submit/manual-2026-09-08T02-28-01Z",
+              "commit": "submit/manual-2026-09-08T02-28-01Z",
+              "release": "submit/manual-2026-09-08T02-28-01Z",
+              "review": "submit/manual-2026-09-08T02-28-01Z",
+              "datetime": "2026-09-08T02:28:01Z",
+              "score": 80,
+              "max-score": 100,
+              "tests": []
+            }
+          ]
         }
       ],
       "collected_at": "2026-09-08T02:27:56Z",
