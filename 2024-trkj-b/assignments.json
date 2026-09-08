@@ -23,7 +23,6 @@
         "offset": "+07:00",
         "source": "auto-detected"
       },
-      "locked": true,
       "grading": {
         "mode": "manual",
         "max_points": 100
