@@ -1,30 +1,4 @@
 {
   "schema": "classroom50/scores/v1",
-  "assignments": {
-    "laporan-persiapan-environment": {
-      "type": "individual",
-      "entries": [
-        {
-          "owner": "MUHAMMADIMAMNUBAHA",
-          "override": true,
-          "submissions": [
-            {
-              "schema": "classroom50/result/v1",
-              "classroom": "2024-trkj-b",
-              "assignment_type": "individual",
-              "owner": "MUHAMMADIMAMNUBAHA",
-              "submission": "submit/manual-2026-09-08T02-23-56Z",
-              "commit": "submit/manual-2026-09-08T02-23-56Z",
-              "release": "submit/manual-2026-09-08T02-23-56Z",
-              "review": "submit/manual-2026-09-08T02-23-56Z",
-              "datetime": "2026-09-08T02:23:56Z",
-              "score": 85,
-              "max-score": 100,
-              "tests": []
-            }
-          ]
-        }
-      ]
-    }
-  }
+  "assignments": {}
 }
