@@ -43,6 +43,26 @@
               "tests": []
             }
           ]
+        },
+        {
+          "owner": "adnanardiansyah",
+          "override": true,
+          "submissions": [
+            {
+              "schema": "classroom50/result/v1",
+              "classroom": "2024-trkj-b",
+              "assignment_type": "individual",
+              "owner": "adnanardiansyah",
+              "submission": "submit/manual-2026-09-08T02-41-47Z",
+              "commit": "submit/manual-2026-09-08T02-41-47Z",
+              "release": "submit/manual-2026-09-08T02-41-47Z",
+              "review": "submit/manual-2026-09-08T02-41-47Z",
+              "datetime": "2026-09-08T02:41:47Z",
+              "score": 90,
+              "max-score": 100,
+              "tests": []
+            }
+          ]
         }
       ],
       "collected_at": "2026-09-08T02:27:56Z",
