@@ -63,6 +63,26 @@
               "tests": []
             }
           ]
+        },
+        {
+          "owner": "arzana-cloud",
+          "override": true,
+          "submissions": [
+            {
+              "schema": "classroom50/result/v1",
+              "classroom": "2024-trkj-b",
+              "assignment_type": "individual",
+              "owner": "arzana-cloud",
+              "submission": "submit/manual-2026-09-08T02-47-00Z",
+              "commit": "submit/manual-2026-09-08T02-47-00Z",
+              "release": "submit/manual-2026-09-08T02-47-00Z",
+              "review": "submit/manual-2026-09-08T02-47-00Z",
+              "datetime": "2026-09-08T02:47:00Z",
+              "score": 70,
+              "max-score": 100,
+              "tests": []
+            }
+          ]
         }
       ],
       "collected_at": "2026-09-08T02:27:56Z",
