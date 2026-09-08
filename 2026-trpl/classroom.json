@@ -1,0 +1,25 @@
+{
+  "schema": "classroom50/classroom/v1",
+  "name": "2026 TRPL",
+  "short_name": "2026-trpl",
+  "term": "",
+  "org": "tik-pnl",
+  "team": {
+    "id": 19395584,
+    "slug": "classroom50-2026-trpl"
+  },
+  "teams": {
+    "teacher": {
+      "id": 19395585,
+      "slug": "classroom50-2026-trpl-teacher"
+    },
+    "hta": {
+      "id": 19395586,
+      "slug": "classroom50-2026-trpl-hta"
+    },
+    "ta": {
+      "id": 19395587,
+      "slug": "classroom50-2026-trpl-ta"
+    }
+  }
+}
