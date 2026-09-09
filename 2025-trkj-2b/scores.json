@@ -1,4 +1,30 @@
 {
   "schema": "classroom50/scores/v1",
-  "assignments": {}
+  "assignments": {
+    "laporan-1-integrasi-layanan-dasar": {
+      "type": "individual",
+      "entries": [
+        {
+          "owner": "ffauzanaulia2007-rgb",
+          "override": true,
+          "submissions": [
+            {
+              "schema": "classroom50/result/v1",
+              "classroom": "2025-trkj-2b",
+              "assignment_type": "individual",
+              "owner": "ffauzanaulia2007-rgb",
+              "submission": "submit/manual-2026-09-09T07-30-31Z",
+              "commit": "submit/manual-2026-09-09T07-30-31Z",
+              "release": "submit/manual-2026-09-09T07-30-31Z",
+              "review": "submit/manual-2026-09-09T07-30-31Z",
+              "datetime": "2026-09-09T07:30:31Z",
+              "score": 100,
+              "max-score": 100,
+              "tests": []
+            }
+          ]
+        }
+      ]
+    }
+  }
 }
