@@ -61,8 +61,9 @@ import os
 import subprocess
 import sys
 
-# Lockstep with cli/gh-teacher/init_repo.go `feedbackBaseBranch` and the
-# `classroom50-feedback-base-lock` org ruleset (pinned by a Go parity test).
+# Lockstep with cli/shared/contract FeedbackBaseBranch (read by gh-teacher's
+# internal/orgrules) and the `classroom50-feedback-base-lock` org ruleset
+# (pinned by a Go parity test).
 BASE_BRANCH = "feedback"
 
 # Commit-status context, mirroring classroom50/autograde so an agent can poll
@@ -208,6 +209,10 @@ def pr_body(head: str, release_url: str) -> str:
     release_url is the static `.../releases/latest` link (not a pinned tag), so
     it self-updates as new submissions publish even though this body is written
     once at PR creation and only refreshed to backfill a missing link.
+
+    Always the autograded variant: the runner refuses empty_repo and
+    no_autograder assignments at setup, so unlike the Go and TypeScript
+    renderers this copy never drops the autograding lines.
     """
     return "\n".join([
         ":wave:! Classroom 50 opened this pull request as a place for your "
@@ -242,8 +247,8 @@ def pr_body(head: str, release_url: str) -> str:
         "",
         f"The base branch (`{BASE_BRANCH}`) is frozen at the starter so the diff "
         f"always reflects the full body of work. The PR is kept up to date "
-        f"automatically; merging it is the teacher-side "
-        f"\"grading done\" signal.",
+        f"automatically. Merging it is the \"grading done\" signal: teachers "
+        f"and TAs can merge, students can't.",
         "</details>",
     ])
 

@@ -13,11 +13,13 @@ name: Regrade
 # new commit to main after the run being re-run, regrade still grades the
 # earlier (already-submitted) commit, by design: regrade refreshes the score
 # for an existing submission, it does not grade newer un-submitted work. Only
-# the first-grade fallback below (a never-graded repo) tags the current `main`
-# HEAD.
+# a run that actually graded is replayed (the runner skips the acceptance
+# commit, a shim retrofit, and a tag-mode branch push, and would skip again).
 #
-# Fallback: a repo that has a `main` HEAD but no prior autograde run (never
-# graded) is first-graded by pushing a fresh `submit/<ts>-<sha>` tag instead.
+# Fallback: a repo with pushed work but no graded run is first-graded at the
+# student's latest commit; regrade_repos.py (first_gradeable_commit and
+# regrade_repo) explains how. Nothing pushed since acceptance means nothing to
+# grade.
 #
 # Re-run/tag only by design: grading then runs ASYNCHRONOUSLY inside each
 # student repo (it can take minutes), so this workflow does NOT collect
@@ -86,8 +88,11 @@ jobs:
           # autograde run (the regrade path) needs Actions: write; pushing a
           # submit/* tag for a never-graded repo (the first-grade fallback)
           # needs Contents: write; listing the classroom team (regrade is
-          # team-driven, mirroring collect) needs Members: Read. Shared with
-          # collect-scores.yaml. Rotated via `gh teacher rotate-service-token <org>`.
+          # team-driven, mirroring collect) needs Members: Read. First-grading
+          # a commit pushed before a submission-mode change additionally needs
+          # Workflows: Read and write (GitHub's workflow-file rule; the script
+          # names it when hit). Shared with collect-scores.yaml. Rotated via
+          # `gh teacher rotate-service-token <org>`.
           CLASSROOM50_SERVICE_TOKEN: ${{ secrets.CLASSROOM50_SERVICE_TOKEN }}
           CLASSROOM_FILTER: ${{ github.event.inputs.classroom }}
           ASSIGNMENT_FILTER: ${{ github.event.inputs.assignment }}

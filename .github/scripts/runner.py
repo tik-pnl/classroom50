@@ -104,7 +104,8 @@ MAX_CAPTURED_CHARS = 2000
 MAX_LOG_CAPTURED_CHARS = 100_000
 
 # Per-test failure-detail levels -- mirror tests.go / tests-v1.schema.json.
-# full: diff (exact) or expected+actual blocks, plus stderr (the default).
+# full: io tests show a diff (exact) or expected+actual blocks plus stderr;
+# run/python tests show the command's combined output (the default).
 # actual-only: the student's own output, never the expected side or a diff.
 # none: just the failure-kind summary line.
 FAILURE_DETAILS_FULL = "full"
@@ -1629,8 +1630,9 @@ def _make_outcome(name: str, points: int, passed: bool, detail: str,
     """One test's outcome. Carries the v1 result-row fields plus rendering-only
     fields stripped before result.json: a `detail` summary line (the failure
     kind -- safe under every failure-details level) and a `capture` dict of raw
-    streams (stdout/stderr/setup-stdout/setup-stderr/expected) that the
-    renderers clip and policy-filter per surface."""
+    streams (`output` and `setup-output` for run/python tests, `stdout` /
+    `stderr` / `expected` for io tests) that the renderers clip and
+    policy-filter per surface."""
     if score is None:
         score = points if passed else 0
     return {
@@ -1680,16 +1682,21 @@ def _command_env(bundle_dir: pathlib.Path | None) -> dict[str, str]:
 
 def _run_command(command: str, cwd: pathlib.Path, timeout: int,
                  stdin: str = "",
-                 bundle_dir: pathlib.Path | None = None) -> subprocess.CompletedProcess[str]:
+                 bundle_dir: pathlib.Path | None = None,
+                 merge_streams: bool = False) -> subprocess.CompletedProcess[str]:
     """Run a shell command in the student checkout with captured text output
-    and an empty-by-default stdin."""
+    and an empty-by-default stdin. merge_streams folds stderr into stdout
+    (`2>&1`) so a failure reads as it did in the terminal; ordering still
+    follows the child's own buffering. io tests keep the streams apart because
+    the comparison reads stdout."""
     return subprocess.run(
         command,
         shell=True,
         cwd=str(cwd),
         env=_command_env(bundle_dir),
         input=stdin,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT if merge_streams else subprocess.PIPE,
         text=True,
         encoding="utf-8",
         errors="replace",
@@ -1702,10 +1709,10 @@ def _run_setup(setup: str, cwd: pathlib.Path, timeout: int,
                ) -> tuple[str | None, subprocess.CompletedProcess[str] | None]:
     """Run a test's setup command. Returns (error-summary, process): the
     summary is None on success; the process is None when the command never
-    produced one (timeout / failed start). Captured streams travel back raw so
-    the renderers can clip and policy-filter them per surface."""
+    produced one (timeout / failed start). The combined output travels back raw
+    so the renderers can clip and policy-filter it per surface."""
     try:
-        sp = _run_command(setup, cwd, timeout, bundle_dir=bundle_dir)
+        sp = _run_command(setup, cwd, timeout, bundle_dir=bundle_dir, merge_streams=True)
     except subprocess.TimeoutExpired:
         return f"setup timed out after {timeout}s", None
     except OSError as exc:
@@ -1755,7 +1762,7 @@ def _grade_python(spec: dict[str, Any], cwd: pathlib.Path, timeout: int,
     else:
         cmd = f"{spec['run']} --json-report --json-report-file={shlex.quote(str(report))}"
     try:
-        rp = _run_command(cmd, cwd, timeout, bundle_dir=bundle_dir)
+        rp = _run_command(cmd, cwd, timeout, bundle_dir=bundle_dir, merge_streams=True)
     except subprocess.TimeoutExpired:
         shutil.rmtree(report_dir, ignore_errors=True)
         return _make_outcome(name, points, False, f"timed out after {timeout}s")
@@ -1784,7 +1791,7 @@ def _grade_python(spec: dict[str, Any], cwd: pathlib.Path, timeout: int,
             score = min(score, max(0, points - 1))
         detail = f"pytest: {passed_n}/{total_n} cases passed"
         return _make_outcome(name, points, passed, detail, score=score,
-                             capture={"stdout": rp.stdout, "stderr": rp.stderr})
+                             capture={"output": rp.stdout})
 
     # Fallback: no parseable report -> all-or-nothing on the exit code
     # (e.g., an offline runner couldn't load pytest-json-report).
@@ -1792,7 +1799,7 @@ def _grade_python(spec: dict[str, Any], cwd: pathlib.Path, timeout: int,
     detail = (f"pytest exit {rp.returncode} "
               f"(no JSON report from pytest-json-report; scored on exit code)")
     return _make_outcome(name, points, passed, detail,
-                         capture={"stdout": rp.stdout, "stderr": rp.stderr})
+                         capture={"output": rp.stdout})
 
 
 def execute_test(spec: dict[str, Any], *, cwd: pathlib.Path,
@@ -1811,9 +1818,8 @@ def execute_test(spec: dict[str, Any], *, cwd: pathlib.Path,
     setup = spec.get("setup") or ""
     if setup:
         err, sp = _run_setup(setup, cwd, timeout, bundle_dir=fixtures_dir)
-        if sp is not None:
-            setup_capture = {k: v for k, v in
-                             (("setup-stdout", sp.stdout), ("setup-stderr", sp.stderr)) if v}
+        if sp is not None and sp.stdout:
+            setup_capture = {"setup-output": sp.stdout}
         if err:
             outcome = _make_outcome(name, points, False, err)
             outcome["failure-kind"] = "setup"
@@ -1821,14 +1827,18 @@ def execute_test(spec: dict[str, Any], *, cwd: pathlib.Path,
         outcome = _execute_spec(spec, cwd=cwd, fixtures_dir=fixtures_dir,
                                 name=name, points=points, timeout=timeout)
 
-    # Setup streams ride every outcome: a setup failure's details show them,
-    # and show-output includes them even on a pass (#764).
+    # Setup output rides every outcome: a setup failure's details show it,
+    # and show-output includes it even on a pass (#764).
     outcome["capture"] = {**setup_capture, **outcome.get("capture", {})}
     outcome["type"] = spec["type"]
     if spec["type"] == TEST_TYPE_IO:
         outcome["comparison"] = spec.get("comparison")
     outcome["failure-details"] = spec.get("failure-details") or FAILURE_DETAILS_FULL
     outcome["show-output"] = bool(spec.get("show-output"))
+    # The teacher's commands as written (not the pytest-augmented one), for the
+    # opt-in show-command rendering.
+    outcome["show-command"] = bool(spec.get("show-command"))
+    outcome["commands"] = {"setup": setup, "run": spec["run"]}
     return outcome
 
 
@@ -1848,14 +1858,15 @@ def _execute_spec(spec: dict[str, Any], *, cwd: pathlib.Path,
     except TestFixtureError as exc:
         return _make_outcome(name, points, False, str(exc))
 
+    # io compares stdout, so only run tests merge streams.
+    merge = ttype == TEST_TYPE_RUN
     try:
-        rp = _run_command(spec["run"], cwd, timeout, stdin=stdin, bundle_dir=fixtures_dir)
+        rp = _run_command(spec["run"], cwd, timeout, stdin=stdin,
+                          bundle_dir=fixtures_dir, merge_streams=merge)
     except subprocess.TimeoutExpired:
         return _make_outcome(name, points, False, f"timed out after {timeout}s")
     except OSError as exc:
         return _make_outcome(name, points, False, f"failed to start: {exc}")
-
-    capture = {"stdout": rp.stdout, "stderr": rp.stderr}
 
     if ttype == TEST_TYPE_RUN:
         want = spec.get("exit-code")
@@ -1863,12 +1874,13 @@ def _execute_spec(spec: dict[str, Any], *, cwd: pathlib.Path,
         passed = rp.returncode == want
         outcome = _make_outcome(name, points, passed,
                                 f"exit {rp.returncode} (wanted {want})",
-                                capture=capture)
+                                capture={"output": rp.stdout})
         if not passed:
             outcome["failure-kind"] = "exit"
         return outcome
 
     # io test.
+    capture = {"stdout": rp.stdout, "stderr": rp.stderr}
     try:
         expected = _resolve_expected(spec, fixtures_dir)
     except TestFixtureError as exc:
@@ -1929,6 +1941,9 @@ def _validate_test_spec(t: Any) -> str | None:
     so = t.get("show-output")
     if so is not None and not isinstance(so, bool):
         return "show-output must be a boolean"
+    sc = t.get("show-command")
+    if sc is not None and not isinstance(sc, bool):
+        return "show-command must be a boolean"
     return None
 
 
@@ -1943,6 +1958,9 @@ def _validate_test_defaults(d: Any) -> str | None:
     so = d.get("show-output")
     if so is not None and not isinstance(so, bool):
         return "show-output must be a boolean"
+    sc = d.get("show-command")
+    if sc is not None and not isinstance(sc, bool):
+        return "show-command must be a boolean"
     return None
 
 
@@ -1960,9 +1978,9 @@ HAND_WRITTEN_TESTS_HINT = (
 
 def load_tests(path: pathlib.Path) -> list[dict[str, Any]]:
     """Parse + re-validate a materialized tests.json, folding the envelope's
-    `defaults` (assignment-level failure-details / show-output) into each spec
-    that doesn't set its own. Raises TestsConfigError on any structural
-    problem."""
+    `defaults` (assignment-level failure-details / show-output / show-command)
+    into each spec that doesn't set its own. Raises TestsConfigError on any
+    structural problem."""
     data = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(data, list):
         # The predictable mistake: the bare array `gh teacher assignment add
@@ -1997,32 +2015,68 @@ def load_tests(path: pathlib.Path) -> list[dict[str, Any]]:
         if t["name"] in seen:
             raise TestsConfigError(f"{TESTS_FILENAME} tests[{i}]: duplicate test name {t['name']!r}")
         seen.add(t["name"])
-        for key in ("failure-details", "show-output"):
+        for key in ("failure-details", "show-output", "show-command"):
             if key not in t and key in defaults:
                 t[key] = defaults[key]
     return tests
+
+
+def _command_lines(outcome: dict[str, Any], *, include_run: bool = True) -> str:
+    """The `--- setup command --- / --- run command ---` blocks for a test that
+    opted in via show-command; empty otherwise. A setup failure passes
+    include_run=False: its run command never executed, and listing it above
+    the error would blame the wrong step."""
+    if not outcome.get("show-command"):
+        return ""
+    commands = outcome.get("commands") or {}
+    parts = []
+    for key, label in (("setup", "setup command"), ("run", "run command")):
+        if key == "run" and not include_run:
+            continue
+        text = (commands.get(key) or "").rstrip()
+        if text:
+            parts.append(f"--- {label} ---\n{text}")
+    return "\n".join(parts)
+
+
+def _setup_output_block(outcome: dict[str, Any], limit: int) -> str:
+    """The labelled `--- setup output ---` block of an outcome's setup command;
+    empty when it printed nothing."""
+    text = (outcome.get("capture") or {}).get("setup-output") or ""
+    if not text.strip():
+        return ""
+    return f"--- setup output ---\n{_clip(text, limit)}"
 
 
 def compose_detail(outcome: dict[str, Any], *, limit: int = MAX_CAPTURED_CHARS) -> str:
     """Failure text for one failing outcome, clipped to the surface's limit
     and honoring the test's failure-details level: `none` stops at the
     failure-kind summary line, `actual-only` adds only the student's own
-    streams, and `full` (the default) also shows the expected side."""
+    streams, and `full` (the default) also shows the expected side. The
+    commands are prepended when the test opted in via show-command."""
     level = outcome.get("failure-details") or FAILURE_DETAILS_FULL
     detail = (outcome.get("detail") or "").rstrip()
     if level == FAILURE_DETAILS_NONE:
         return detail
     cap = outcome.get("capture") or {}
     kind = outcome.get("failure-kind")
+    commands = _command_lines(outcome, include_run=kind != "setup")
+    if commands:
+        detail += f"\n{commands}"
     if kind == "setup":
-        out = cap.get("setup-stderr") or cap.get("setup-stdout") or ""
-        return detail + (f"\n{_clip(out, limit)}" if out else "")
-    if kind == "cases":
-        out = cap.get("stdout") or cap.get("stderr") or ""
-        return detail + (f"\n{_clip(out, limit)}" if out else "")
-    if kind == "exit":
-        out = cap.get("stderr") or cap.get("stdout") or ""
-        return detail + (f"\n{_clip(out, limit)}" if out else "")
+        block = _setup_output_block(outcome, limit)
+        return detail + (f"\n{block}" if block else "")
+    # A test that fails in its run phase skips the output section, so under
+    # show-output the setup output rides along here instead of vanishing.
+    if outcome.get("show-output"):
+        block = _setup_output_block(outcome, limit)
+        if block:
+            detail += f"\n{block}"
+    if kind in ("cases", "exit"):
+        # Safe at every failure-details level: these tests have no expected
+        # side to redact.
+        out = cap.get("output") or ""
+        return detail + (f"\n--- output ---\n{_clip(out, limit)}" if out.strip() else "")
     if kind == "output":
         comparison = outcome.get("comparison") or ""
         stdout = cap.get("stdout") or ""
@@ -2057,19 +2111,23 @@ def compose_detail(outcome: dict[str, Any], *, limit: int = MAX_CAPTURED_CHARS) 
 
 
 def compose_output(outcome: dict[str, Any], *, limit: int = MAX_CAPTURED_CHARS) -> str:
-    """Captured setup/run streams of one outcome for the opt-in show-output
+    """Captured setup/run output of one outcome for the opt-in show-output
     section (#764) -- rendered for passing tests, since failing ones already
-    surface their output through the failure details."""
+    surface their output through the failure details. The commands lead when
+    the test also opted in via show-command."""
     cap = outcome.get("capture") or {}
-    parts = []
-    for key, label in (("setup-stdout", "setup stdout"),
-                       ("setup-stderr", "setup stderr"),
+    outputs = []
+    for key, label in (("setup-output", "setup output"),
+                       ("output", "output"),
                        ("stdout", "stdout"),
                        ("stderr", "stderr")):
         text = cap.get(key) or ""
         if text.strip():
-            parts.append(f"--- {label} ---\n{_clip(text, limit)}")
-    return "\n".join(parts) or "(no output captured)"
+            outputs.append(f"--- {label} ---\n{_clip(text, limit)}")
+    if not outputs:
+        outputs.append("(no output captured)")
+    commands = _command_lines(outcome)
+    return "\n".join(([commands] if commands else []) + outputs)
 
 
 def render_declarative_body(result: dict[str, Any], outcomes: list[dict[str, Any]],

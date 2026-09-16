@@ -79,18 +79,34 @@ RESULT_SCHEMA_V1 = "classroom50/result/v1"
 # (created by autograde-runner.yaml on push to the repo's default branch).
 SUBMIT_TAG_PREFIX = "submit/"
 
-# Repo permission the grant gives each staff role's team. Hand-mirrored from Go
-# StaffTeamRepoPermissions (source of truth; parity-tested); keep in lockstep.
-# The head-TA/TA-team template read is granted eagerly at assignment add/reuse
-# (Go side, which hardcodes read there); this collect-time
-# grant reads the value below and is the idempotent re-affirm. A role absent
-# here gets nothing (the teacher team is an org owner with access via ownership,
-# so only the non-owner staff teams, head-TA and TA, need a grant).
-STAFF_TEAM_PERMISSIONS = {"hta": "pull", "ta": "pull"}
+# Repo permission the collect-time grant gives each staff role's team on every
+# student assignment repo. Hand-mirrored from Go StaffTeamRepoPermissions
+# (source of truth; parity-tested); keep in lockstep. Both non-owner staff teams
+# get push: merging the Feedback PR needs write on the repo, and the
+# feedback-base ruleset exempts every staff team from its lock. A role absent
+# here gets nothing (the teacher team is an org owner with access via
+# ownership, so only the non-owner staff teams need a grant).
+STAFF_TEAM_PERMISSIONS = {"hta": "push", "ta": "push"}
+
+# Private in-org templates are a separate, read-only axis: staff need to read
+# the starter, never to change it from a student-repo grant. Same value the Go
+# side hardcodes for the eager grant at assignment add/reuse.
+TEMPLATE_STAFF_PERMISSION = "pull"
+
+# GitHub repo permission levels, weakest first. Drives both the ranking a grant
+# uses to tell "already has at least this" from "has some lesser access" (a
+# staff team granted pull by an older collector must be upgraded to push, not
+# skipped) and the flag scan in repo_permission_level.
+_PERMISSION_LEVELS = ("pull", "triage", "push", "maintain", "admin")
+_PERMISSION_RANK = {level: i for i, level in enumerate(_PERMISSION_LEVELS)}
 
 # Every staff role that has a classroom team. Mirrors Go contract.StaffRoles and
 # the web STAFF_ROLES; the derived slug for each is `classroom50-<short>-<role>`.
 STAFF_ROLES = ("teacher", "hta", "ta")
+
+# The org's config repo. Only an owner-run Classroom 50 flow grants a team
+# access to it, so the grant marks a real staff team (see staff_team_is_claimed).
+CONFIG_REPO = "classroom50"
 
 # Body markers that identify a rate-limit response, for the cases no header
 # names: GitHub words the secondary limit and the abuse detector differently.
@@ -291,6 +307,9 @@ def main() -> int:
     ).rstrip("/")
 
     classroom_dirs = list(iter_classrooms(base_dir, classroom_filter))
+    # Every classroom, filter or not: `<short>`'s grant pass must know a
+    # classroom `<short>-<role>` exists even when only `<short>` is collected.
+    all_classrooms = classroom_dir_names(base_dir)
     if not classroom_dirs:
         if classroom_filter:
             # An explicit filter matching nothing is a FAILED run (typo, or a
@@ -353,6 +372,7 @@ def main() -> int:
                 repo_index=repo_index,
                 team_members=team_members,
                 assignment_filter=assignment_filter,
+                all_classrooms=all_classrooms,
             )
         except GrantThrottled as exc:
             # NOT a failure: collection is untouched, the pass is idempotent, and
@@ -573,6 +593,16 @@ def main() -> int:
 
 
 # Classroom enumeration -------------------------------------------------------
+
+
+def classroom_dir_names(base_dir: pathlib.Path) -> frozenset[str]:
+    """Every directory under base_dir holding a classroom.json (the same
+    authority the Go and web sides probe for a sibling classroom)."""
+    if not base_dir.is_dir():
+        return frozenset()
+    return frozenset(
+        p.name for p in base_dir.iterdir() if p.is_dir() and (p / "classroom.json").is_file()
+    )
 
 
 def iter_classrooms(
@@ -926,7 +956,7 @@ def is_empty_repo(entry: dict[str, Any]) -> bool:
 
 def is_no_autograder(entry: dict[str, Any]) -> bool:
     """True only when no_autograder is the boolean `true` (strict, like
-    is_empty_repo). A templated no_autograder assignment commits no shim, so it
+    is_empty_repo). A no_autograder assignment commits no shim, so it
     never autogrades and produces no submit/* releases: regrade skips it and
     collection detects its submissions from repo state, exactly like empty_repo.
     Keep byte-identical across collect/regrade and the autograde-runner read
@@ -946,7 +976,7 @@ def is_init_shim(entry: dict[str, Any]) -> bool:
 
 def skips_grading(entry: dict[str, Any]) -> bool:
     """True when the assignment never autogrades: either a bare empty_repo or a
-    templated no_autograder (teacher-supplied CI). The "does not autograde"
+    no_autograder (no built-in autograder). The "does not autograde"
     predicate family; collection/regrade poll neither. NOTE: init_shim is
     deliberately EXCLUDED, since an init_shim repo commits the default shim and
     autogrades, so it must be collected/regraded like any built-in assignment."""
@@ -978,6 +1008,17 @@ def all_assignment_slugs(assignments: dict[str, Any]) -> list[str]:
         if isinstance(slug, str) and slug:
             slugs.append(slug)
     return slugs
+
+
+def team_assignment_slugs(assignments: dict[str, Any]) -> set[str]:
+    """The `mode: team` slugs, whose repos are `<classroom>-<slug>-group-<n>`."""
+    return {
+        entry["slug"]
+        for entry in assignments.get("assignments") or []
+        if isinstance(entry.get("slug"), str)
+        and entry["slug"]
+        and normalize_assignment_type(entry.get("mode")) == "team"
+    }
 
 
 def poll_candidate_names(
@@ -1895,7 +1936,7 @@ def team_poll_owners(
     service_token: str,
     repo_index: "RepoIndex | None",
 ) -> tuple[list[str], bool]:
-    """The `group-<n>` owner segments a team assignment polls, sorted by
+    """The `group-<n>` owner segments of a team assignment's repos, sorted by
     counter. Team repos carry no username, so the targets come from the org
     repo listing (already read once per run) or, when that listing is
     unreadable, from enumerating the assignment's group teams. Returns
@@ -2002,29 +2043,37 @@ class StaffTeam(NamedTuple):
 def resolve_staff_team_slugs(
     classroom_meta: dict[str, Any], classroom_short: str
 ) -> dict[str, StaffTeam]:
-    """Map each staff role to its GitHub team (role -> StaffTeam). A slug
-    recorded in classroom.json `teams` is authoritative (GitHub may re-slug on a
-    name collision); every other role in STAFF_ROLES falls back to the derived
-    `classroom50-<short>-<role>`, the same fallback the web app applies.
+    """Map each staff role to its GitHub team (role -> StaffTeam). Every role in
+    STAFF_ROLES resolves to the derived `classroom50-<short>-<role>`, the slug
+    both writers create (the canonical short-name guard rules out GitHub
+    re-slugging), so a classroom whose `teams` block predates a role, or was
+    never written, still grants that role's team.
 
-    The fallback matters for classrooms whose `teams` block predates a role or
-    was never written: the web creates and populates that role's team on first
-    use without recording it, and without the fallback the grant pass would
-    never see it and the classroom's TAs would silently get no access.
+    A recorded `teams.<role>` entry is trusted only when its slug IS that
+    derived slug: classroom.json is head-TA-writable and this map decides
+    which teams get push on every student repo, so an entry naming any other
+    team (the student team, an invite team, a typo) is warned about and
+    replaced by the derived slug. Matching entries are marked `recorded` so a
+    404 on the team is reported as an inconsistency rather than "never set up".
 
-    Roles recorded under `teams` that aren't in STAFF_ROLES are kept as-is."""
+    Roles recorded under `teams` that aren't in STAFF_ROLES are ignored: the
+    grant map has no permission for them anyway."""
     out: dict[str, StaffTeam] = {}
     teams = classroom_meta.get("teams")
-    if isinstance(teams, dict):
-        for role, ref in teams.items():
-            if not isinstance(ref, dict):
-                continue
-            slug = ref.get("slug")
-            if isinstance(slug, str) and slug.strip():
-                out[role] = StaffTeam(slug.strip(), recorded=True)
+    recorded = teams if isinstance(teams, dict) else {}
     for role in STAFF_ROLES:
-        if role not in out:
-            out[role] = StaffTeam(staff_team_slug(classroom_short, role), recorded=False)
+        derived = staff_team_slug(classroom_short, role)
+        ref = recorded.get(role)
+        slug = ref.get("slug") if isinstance(ref, dict) else None
+        recorded_slug = slug.strip() if isinstance(slug, str) else ""
+        if recorded_slug and recorded_slug != derived:
+            emit_warning(
+                f"{classroom_short}: classroom.json records {recorded_slug!r} as the {role} "
+                f"staff team, which is not the team Classroom 50 creates for that role; "
+                f"using {derived!r} instead. Fix the `teams.{role}` entry or run "
+                f"`gh teacher staff add` to re-record it."
+            )
+        out[role] = StaffTeam(derived, recorded=recorded_slug == derived)
     return out
 
 
@@ -2094,16 +2143,19 @@ def grant_classroom_team_access(
     repo_index: RepoIndex | None = None,
     team_members: "TeamMembers | None" = None,
     assignment_filter: str = "",
+    all_classrooms: frozenset[str] = frozenset(),
 ) -> None:
     """Grant each classroom staff team its mapped repo permission (see
-    STAFF_TEAM_PERMISSIONS) on every EXISTING student assignment repo and on each
-    private, in-org assignment template. Additive + idempotent, so re-running
-    collection re-affirms access cheaply.
+    STAFF_TEAM_PERMISSIONS) on every EXISTING student assignment repo, and read
+    (TEMPLATE_STAFF_PERMISSION) on each private, in-org assignment template.
+    Additive + idempotent, so re-running collection re-affirms access cheaply;
+    a team holding less than its mapped level is upgraded, never downgraded.
 
     Student-repo targets are the (team member × assignment) product (the same
     set collect_classroom polls), narrowed to the repos that exist when
     `repo_index` can say (thousands of names per classroom, two wasted requests
-    each). A per-repo 404/422 (repo not accepted yet, or template not
+    each); a `mode: team` assignment contributes its `group-<n>` repos instead.
+    A per-repo 404/422 (repo not accepted yet, or template not
     org-owned) is warned-and-skipped; a hard error (401/403/599) propagates so
     main() aborts; a throttle raises GrantThrottled, which main() reports as a
     deferral rather than a failure. The head-TA and TA teams are resolved from
@@ -2120,11 +2172,19 @@ def grant_classroom_team_access(
     and its private template); blank grants every assignment as before.
     """
     staff_teams = resolve_staff_team_slugs(classroom_meta, classroom_short)
-    grant_teams = [
-        (role, team, STAFF_TEAM_PERMISSIONS[role])
-        for role, team in staff_teams.items()
-        if role in STAFF_TEAM_PERMISSIONS
-    ]
+    grant_teams = []
+    for role, team in staff_teams.items():
+        if role not in STAFF_TEAM_PERMISSIONS:
+            continue
+        # Classroom `<short>-<role>`'s student team sits at this slug; a roster
+        # is never staff, whatever an older release granted it.
+        if f"{classroom_short}-{role}" in all_classrooms:
+            print(
+                f"{classroom_short}: {team.slug!r} is the student team of classroom "
+                f"{classroom_short}-{role}, so {classroom_short} has no {role} team to grant."
+            )
+            continue
+        grant_teams.append((role, team, STAFF_TEAM_PERMISSIONS[role]))
     if not grant_teams:
         return
 
@@ -2167,25 +2227,45 @@ def grant_classroom_team_access(
 
     # Resolved once rather than per staff role. Knowing the full list up front is
     # also what lets a throttled pass say how much is left for the next run.
+    # Team repos carry no username, so their slugs resolve through the same
+    # listing-derived owners collection polls instead of the username product.
+    team_slugs = team_assignment_slugs(assignments)
+    has_team_slug = any(slug in team_slugs for slug in slugs)
     candidates = [
         assignment_repo_name(classroom_short, slug, username)
         for slug in slugs
+        if slug not in team_slugs
         for username in usernames
     ]
     if repo_index is not None and candidates:
+        # A team slug needs the whole listing anyway (team_poll_owners reads
+        # names()), so read it now rather than probe candidates first.
+        if has_team_slug:
+            repo_index.names()
         repo_index.prefetch(candidates)
-    targets: list[tuple[str, str]] = [
+    student_targets: list[tuple[str, str]] = [
         (org, repo_name)
         for repo_name in candidates
         if repo_index is None or repo_index.contains(repo_name)
     ]
-    targets.extend(
-        private_template_targets(
-            api_url, org, assignments, service_token, repo_index=repo_index,
-            assignment_filter=assignment_filter,
+    for slug in slugs:
+        if slug not in team_slugs:
+            continue
+        group_owners, ok = team_poll_owners(
+            api_url, org, classroom_short, slug, service_token, repo_index
         )
+        # team_poll_owners already warned; the add-only pass retries next run.
+        if not ok:
+            continue
+        student_targets.extend(
+            (org, assignment_repo_name(classroom_short, slug, owner))
+            for owner in group_owners
+        )
+    template_targets = private_template_targets(
+        api_url, org, assignments, service_token, repo_index=repo_index,
+        assignment_filter=assignment_filter,
     )
-    if not targets:
+    if not student_targets and not template_targets:
         return
 
     # Which teams the pass could work with, so the tail can tell "nothing to
@@ -2235,14 +2315,42 @@ def grant_classroom_team_access(
             continue
         populated_teams.append(team_slug)
 
+        # Student repos take the role's mapped level; templates stay read for
+        # every role.
+        targets = [(o, r, permission) for o, r in student_targets] + [
+            (o, r, TEMPLATE_STAFF_PERMISSION) for o, r in template_targets
+        ]
+
         # One bulk read replaces grant_team_repo's per-repo access check: after
         # the first run nearly every target is already granted, so that check,
         # not the PUT, is the request that dominates. None means "unknown".
         known_repos = known_team_repos(
             api_url, org, team_slug, service_token, classroom_short
         )
+        # Any member can create a team at this slug; only one Classroom 50
+        # granted config-repo access gets push on every student repo.
+        claimed = staff_team_is_claimed(
+            api_url, org, team_slug, service_token, known_repos
+        )
+        if claimed is None:
+            emit_warning(
+                f"{classroom_short}: could not check whether team {team_slug!r} has access "
+                f"to the {CONFIG_REPO} repository, so it was not granted access to student "
+                f"repos this run; the next run retries."
+            )
+            continue
+        if not claimed:
+            emit_warning(
+                f"{classroom_short}: team {team_slug!r} exists but was not created by "
+                f"Classroom 50 (it has no access to the {CONFIG_REPO} repository), so it "
+                f"was not granted access to student repos. Review its members at "
+                f"https://github.com/orgs/{org}/teams/{team_slug}, then either delete it "
+                f"or grant it access to the {CONFIG_REPO} repository to use it as the "
+                f"{role} team."
+            )
+            continue
         granted = 0
-        for index, (t_owner, t_repo) in enumerate(targets):
+        for index, (t_owner, t_repo, t_permission) in enumerate(targets):
             try:
                 if grant_team_repo(
                     api_url,
@@ -2250,7 +2358,7 @@ def grant_classroom_team_access(
                     team_slug,
                     t_owner,
                     t_repo,
-                    permission,
+                    t_permission,
                     service_token,
                     known_repos=known_repos,
                 ):
@@ -2268,7 +2376,7 @@ def grant_classroom_team_access(
                 # 404 = repo not accepted yet; 422 = not org-owned. Neither is
                 # a token problem, so skip that repo.
                 emit_warning(
-                    f"{t_owner}/{t_repo}: could not grant {team_slug!r} {permission}: "
+                    f"{t_owner}/{t_repo}: could not grant {team_slug!r} {t_permission}: "
                     f"HTTP {exc.code} ({exc.reason or 'no reason'}){body_note(exc)}; skipping"
                 )
 
@@ -2307,7 +2415,7 @@ def warn_no_staff_to_grant(
     slugs = ", ".join(team.slug for _, team, _ in grant_teams)
     return (
         f"{classroom_short}: no staff access was granted because no head-TA or TA "
-        f"team has members ({slugs}). Staff get read access to student repositories "
+        f"team has members ({slugs}). Staff get access to student repositories "
         f"only through those teams. Check that each TA has the head TA or TA role on "
         f"the roster page, or run `gh teacher staff add {org} {classroom_short} "
         f"<username> --role ta`, then run this workflow again."
@@ -2370,15 +2478,39 @@ def private_template_targets(
     return targets
 
 
+def staff_team_is_claimed(
+    api_url: str,
+    org: str,
+    team_slug: str,
+    token: str,
+    known_repos: dict[str, str] | None,
+) -> bool | None:
+    """Whether `team_slug` holds a grant on the config repo, the proof Classroom
+    50 created it (the grant half of the Go/web adopt guard; the collector never
+    adopts, so the recorded-id exception does not apply). Read from the bulk repo
+    listing when available, else one per-repo read. None means the read failed:
+    the caller says "could not check" rather than "not Classroom 50's", and
+    grants nothing either way."""
+    key = f"{org}/{CONFIG_REPO}".lower()
+    if known_repos is not None:
+        return key in known_repos
+    try:
+        return team_repo_permission(api_url, org, team_slug, org, CONFIG_REPO, token) is not None
+    except urllib.error.HTTPError as exc:
+        if classify(exc) is not SKIPPABLE:
+            raise
+        return None
+
+
 def known_team_repos(
     api_url: str, org: str, team_slug: str, token: str, classroom_short: str
-) -> set[str] | None:
-    """Lowercased `owner/repo` of every repo `team_slug` already has access to,
-    or None when the listing failed. None means "unknown", which makes callers
-    fall back to the per-repo access check, never to "not granted", which
-    would re-PUT every repo on every run."""
+) -> dict[str, str] | None:
+    """Lowercased `owner/repo` -> permission level for every repo `team_slug`
+    already has access to, or None when the listing failed. None means
+    "unknown", which makes callers fall back to the per-repo access check, never
+    to "not granted", which would re-PUT every repo on every run."""
     try:
-        return list_team_repo_full_names(api_url, org, team_slug, token)
+        return list_team_repo_permissions(api_url, org, team_slug, token)
     except urllib.error.HTTPError as exc:
         if classify(exc) is not SKIPPABLE:
             raise
@@ -3647,12 +3779,13 @@ def _repo_facts_map(repos: Iterable[dict[str, Any]]) -> dict[str, RepoFacts]:
     return visible
 
 
-def list_team_repo_full_names(
+def list_team_repo_permissions(
     api_url: str, org: str, team_slug: str, token: str
-) -> set[str]:
-    """Lowercased `owner/repo` of every repo `team_slug` has access to, walking
-    pagination. Hits GET /orgs/{org}/teams/{slug}/repos, the bulk form of
-    team_has_repo_access, read once instead of once per candidate repo.
+) -> dict[str, str]:
+    """Lowercased `owner/repo` -> permission level (see repo_permission_level)
+    for every repo `team_slug` has access to, walking pagination. Hits
+    GET /orgs/{org}/teams/{slug}/repos, the bulk form of team_repo_permission,
+    read once instead of once per candidate repo.
 
     Raises urllib.error.HTTPError on any non-2xx (including 404 when the team
     doesn't exist) so the caller can warn-and-skip vs. hard-fail."""
@@ -3661,15 +3794,43 @@ def list_team_repo_full_names(
         f"{api_url}/orgs/{urllib.parse.quote(org, safe='')}/teams/"
         f"{urllib.parse.quote(team_slug, safe='')}/repos"
     )
-    full_names = _paginate_field_list(
+    repos = _paginate_objects_parallel(
         page_url=lambda page: f"{base}?per_page={per_page}&page={page}",
         api_url=api_url,
         token=token,
         resource_label=f"orgs/{org}/teams/{team_slug}/repos",
-        field="full_name",
-        parallel=True,
     )
-    return {name.lower() for name in full_names}
+    levels: dict[str, str] = {}
+    for repo in repos:
+        full_name = repo.get("full_name")
+        if isinstance(full_name, str) and full_name:
+            levels[full_name.lower()] = repo_permission_level(repo)
+    return levels
+
+
+def repo_permission_level(repo: dict[str, Any]) -> str:
+    """The highest permission a team-repo object grants, as one of
+    _PERMISSION_RANK's keys. Read from the `permissions` flags rather than
+    `role_name`, which can be a custom role name that ranks nowhere; an object
+    with neither is treated as bare read, the least any listed repo implies."""
+    flags = repo.get("permissions")
+    if isinstance(flags, dict):
+        for level in reversed(_PERMISSION_LEVELS):
+            if flags.get(level) is True:
+                return level
+    role = repo.get("role_name")
+    if isinstance(role, str) and role.lower() in _PERMISSION_RANK:
+        return role.lower()
+    return "pull"
+
+
+def permission_satisfies(current: str | None, wanted: str) -> bool:
+    """Whether a team holding `current` already has at least `wanted`. None
+    (no access) never satisfies; an unranked value is treated as no access so
+    the grant re-PUTs rather than trusting it."""
+    if current is None:
+        return False
+    return _PERMISSION_RANK.get(current, -1) >= _PERMISSION_RANK.get(wanted, 0)
 
 
 def group_member_usernames(
@@ -3945,24 +4106,32 @@ def request_count() -> int:
         return _request_count
 
 
-def team_has_repo_access(
+def team_repo_permission(
     api_url: str, org: str, team_slug: str, repo_owner: str, repo: str, token: str
-) -> bool:
-    """Whether `team_slug` already has any access to <repo_owner>/<repo> (2xx =
-    yes, 404 = no). Keeps grant_team_repo idempotent. Mirrors Go's
-    teamHasRepoAccess."""
+) -> str | None:
+    """The permission level `team_slug` holds on <repo_owner>/<repo>, or None
+    when it has none (404). The `repository+json` media type makes GitHub
+    return the repo with its `permissions` flags instead of an empty 204.
+    Keeps grant_team_repo idempotent. No Go mirror: the Go grant path
+    (teamHasRepoAccess) only checks presence."""
     url = (
         f"{api_url}/orgs/{urllib.parse.quote(org, safe='')}/teams/"
         f"{urllib.parse.quote(team_slug, safe='')}/repos/"
         f"{urllib.parse.quote(repo_owner, safe='')}/{urllib.parse.quote(repo, safe='')}"
     )
     try:
-        _http_send("GET", url, token, accept="application/vnd.github+json", body=None)
+        _status, raw = _http_send(
+            "GET", url, token, accept="application/vnd.github.v3.repository+json", body=None
+        )
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
-            return False
+            return None
         raise
-    return True
+    try:
+        parsed = json.loads(raw.decode("utf-8")) if raw else None
+    except (ValueError, UnicodeDecodeError):
+        parsed = None
+    return repo_permission_level(parsed if isinstance(parsed, dict) else {})
 
 
 def grant_team_repo(
@@ -3974,25 +4143,27 @@ def grant_team_repo(
     permission: str,
     token: str,
     *,
-    known_repos: set[str] | None = None,
+    known_repos: dict[str, str] | None = None,
 ) -> bool:
     """Grant `team_slug` `permission` on <repo_owner>/<repo> via
     PUT /orgs/{org}/teams/{slug}/repos/{owner}/{repo}, skipping the write when
-    the team already has any access (idempotent). Returns whether a new grant was
-    applied. Mirrors Go's grantTeamRepo. A 403 (token lacks Administration) or
-    599 propagates so main() aborts the run (classify -> FATAL); a 404/422 (repo
+    the team already holds at least that level (idempotent; a lesser level is
+    upgraded, a greater one left alone). Returns whether a grant was applied.
+    Mirrors Go's grantTeamRepo. A 403 (token lacks Administration) or 599
+    propagates so main() aborts the run (classify -> FATAL); a 404/422 (repo
     absent / not org-owned) is left for the caller to warn-and-skip.
 
     `known_repos` is the team's repos already read in bulk (lowercased
-    `owner/repo`, see list_team_repo_full_names), which answers the idempotence
-    check without a request; None means unknown and costs the per-repo check."""
+    `owner/repo` -> level, see list_team_repo_permissions), which answers the
+    idempotence check without a request; None means unknown and costs the
+    per-repo check."""
     if known_repos is not None:
-        already_granted = f"{repo_owner}/{repo}".lower() in known_repos
+        current = known_repos.get(f"{repo_owner}/{repo}".lower())
     else:
-        already_granted = team_has_repo_access(
+        current = team_repo_permission(
             api_url, org, team_slug, repo_owner, repo, token
         )
-    if already_granted:
+    if permission_satisfies(current, permission):
         return False
     url = (
         f"{api_url}/orgs/{urllib.parse.quote(org, safe='')}/teams/"
@@ -4111,7 +4282,11 @@ def throttle_sleep_budget_spent(delay: float) -> bool:
     with _transport_lock:
         start = max(now, getattr(_throttle_local, "sleep_until", 0.0))
         end = start + delay
-        charge = max(0.0, end - max(start, _throttle_sleep_until))
+        # Charge `delay` less the overlap, not `end - start`: subtracting two
+        # large monotonic readings loses ULPs, and five 60s waits then overshoot
+        # a 300s budget.
+        overlap = min(delay, max(0.0, _throttle_sleep_until - start))
+        charge = delay - overlap
         if _throttle_sleep_spent + charge > MAX_TOTAL_THROTTLE_SLEEP_SECONDS:
             return True
         _throttle_sleep_spent += charge

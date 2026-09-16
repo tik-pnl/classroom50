@@ -64,6 +64,8 @@ jobs:
       go:             ${{ steps.read.outputs.go }}
       rust:           ${{ steps.read.outputs.rust }}
       apt:            ${{ steps.read.outputs.apt }}
+      # "--no-install-recommends" (the default) or "" (runtime.apt-recommends).
+      apt-install-flags: ${{ steps.read.outputs.apt-install-flags }}
       base-url:       ${{ steps.read.outputs.base-url }}
       classroom:      ${{ steps.read.outputs.classroom }}
       assignment:     ${{ steps.read.outputs.assignment }}
@@ -272,14 +274,14 @@ jobs:
           if entry.get("empty_repo") is True:
               fail(f"assignment {assignment!r} is an empty-repository assignment: autograding is disabled for it")
 
-          # no_autograder assignments (templated, teacher-supplied CI) commit no
+          # no_autograder assignments (no built-in autograder) commit no
           # shim, so the runner should never be invoked for one. Enforced here
           # for the same student-writable reason as empty_repo: a hand-added
           # workflow must not re-enter the grading pipeline collection skips.
           # Strict boolean, byte-identical to is_no_autograder in
           # collect_scores.py / regrade_repos.py.
           if entry.get("no_autograder") is True:
-              fail(f"assignment {assignment!r} is a no-autograder assignment (teacher-supplied CI): built-in autograding is disabled for it")
+              fail(f"assignment {assignment!r} is a no-autograder assignment: built-in autograding is disabled for it")
 
           # === Re-validate the declarative tests block ===
           # Mirrors cli/gh-teacher/tests.go (write-time validator) so a
@@ -294,7 +296,8 @@ jobs:
               _FAILURE_DETAILS = {"full", "actual-only", "none"}
               _TEST_KEYS = {"name", "type", "setup", "run", "input", "input-file",
                             "expected", "expected-file", "comparison", "timeout",
-                            "exit-code", "points", "failure-details", "show-output"}
+                            "exit-code", "points", "failure-details", "show-output",
+                            "show-command"}
               _IO_ONLY_KEYS = ("input", "input-file", "expected", "expected-file", "comparison")
               if not isinstance(tests, list):
                   fail(f"entry {assignment!r}: tests must be an array")
@@ -340,6 +343,9 @@ jobs:
                   so = t.get("show-output")
                   if so is not None and not isinstance(so, bool):
                       fail(f"{where}.show-output must be a boolean")
+                  sc = t.get("show-command")
+                  if sc is not None and not isinstance(sc, bool):
+                      fail(f"{where}.show-command must be a boolean")
                   exit_code = t.get("exit-code")
                   if ttype == "io":
                       comparison = t.get("comparison")
@@ -370,7 +376,7 @@ jobs:
           if test_defaults is not None:
               if not isinstance(test_defaults, dict):
                   fail(f"entry {assignment!r}: test_defaults must be an object")
-              extras = sorted(set(test_defaults) - {"failure-details", "show-output"})
+              extras = sorted(set(test_defaults) - {"failure-details", "show-output", "show-command"})
               if extras:
                   fail(f"entry {assignment!r}: test_defaults has unsupported keys: {extras}")
               fd = test_defaults.get("failure-details")
@@ -379,6 +385,9 @@ jobs:
               so = test_defaults.get("show-output")
               if so is not None and not isinstance(so, bool):
                   fail(f"entry {assignment!r}: test_defaults.show-output must be a boolean")
+              sc = test_defaults.get("show-command")
+              if sc is not None and not isinstance(sc, bool):
+                  fail(f"entry {assignment!r}: test_defaults.show-command must be a boolean")
 
           runtime = entry.get("runtime") or {}
           if not isinstance(runtime, dict):
@@ -388,7 +397,7 @@ jobs:
           # A hand-edited assignments.json with extra keys (e.g., an
           # `options:` smuggled at runtime level) would otherwise pass
           # this validator silently while the CLI rejects it at write.
-          _RUNTIME_KEYS = {"runs-on", "container", "python", "node", "java", "go", "rust", "apt"}
+          _RUNTIME_KEYS = {"runs-on", "container", "python", "node", "java", "go", "rust", "apt", "apt-recommends"}
           extras = set(runtime) - _RUNTIME_KEYS
           if extras:
               fail(f"runtime has unsupported keys: {sorted(extras)}")
@@ -401,6 +410,7 @@ jobs:
           go        = runtime.get("go")       or ""
           rust      = runtime.get("rust")     or ""
           apt       = runtime.get("apt")      or []
+          apt_recommends = runtime.get("apt-recommends")
 
           # runs-on mirrors GitHub Actions: a single label or an array
           # (["self-hosted", "gpu"]), normalized to a list. No value
@@ -446,6 +456,8 @@ jobs:
                   fail(f"runtime.container.image {image!r} must match {_IMAGE.pattern}")
               if apt:
                   fail("runtime.apt is not allowed when runtime.container is set")
+              if apt_recommends is not None:
+                  fail("runtime.apt-recommends is not allowed when runtime.container is set")
               # Containers run on Ubuntu only: reject a recognized
               # macOS/Windows label; custom/self-hosted labels pass
               # (the teacher owns OS matching). Mirrors Go's
@@ -498,6 +510,17 @@ jobs:
               if not isinstance(pkg, str) or not _APT.match(pkg):
                   fail(f"runtime.apt[{i}] {pkg!r} must match {_APT.pattern}")
           apt_str = " ".join(apt)
+          # Recommended packages are skipped by default (smaller, faster
+          # install); apt-recommends: true restores apt-get's own default so
+          # a stack like pandoc + texlive gets the pieces it pulls in locally
+          # (#815). The flag string is built from this fixed choice, never
+          # from the file, so nothing else can reach the apt-get line.
+          if apt_recommends is not None:
+              if not isinstance(apt_recommends, bool):
+                  fail("runtime.apt-recommends must be a boolean")
+              if not apt:
+                  fail("runtime.apt-recommends requires runtime.apt")
+          apt_install_flags = "" if apt_recommends else "--no-install-recommends"
 
           # === Feedback PR opt-in ===
           # Mirror Go's bool `feedback_pr` field. Re-validated here (like
@@ -751,6 +774,7 @@ jobs:
           emit("go", go)
           emit("rust", rust)
           emit("apt", apt_str)
+          emit("apt-install-flags", apt_install_flags)
           emit("base-url", base_url)
           emit("classroom", classroom)
           emit("assignment", assignment)
@@ -999,7 +1023,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends ${{ needs.setup.outputs.apt }}
+          sudo apt-get install -y ${{ needs.setup.outputs.apt-install-flags }} ${{ needs.setup.outputs.apt }}
 
       # Fail early with a clear message instead of `gh: command not found`
       # after grading (issue #863). Placed after the toolchain steps so a
@@ -1126,23 +1150,40 @@ jobs:
           # recreate to attach the current result + extras atomically. Keep the
           # git tag (--cleanup-tag omitted) so the submission ref is unchanged.
           #
-          # But an org ruleset enforcing immutable releases (same rule noted
-          # above for post-create uploads) ALSO rejects the delete itself with
-          # HTTP 422/403, seen live on a teacher regrade 2026-08-07: the
-          # delete failed, this step went red, and set-latest was skipped even
-          # though grading PASSED and the commit status posted success. gh's
-          # exit codes can't reliably distinguish that ruleset rejection from
-          # a transient error, so re-check existence instead: if the delete
-          # failed and the release is STILL there, treat it as
-          # immutable-blocked: warn and keep the old release rather than
-          # failing the job over record-keeping GitHub forbids. If the delete
-          # failed but the release is GONE (a race removed it), proceed to
-          # create as usual.
+          # Two ways GitHub forbids that refresh, both kept rather than failed:
+          # grading already posted its commit status, so a refresh GitHub
+          # forbids must not fail the job or lose the record.
+          #
+          # 1. The release itself is immutable (the repo/org "immutable
+          #    releases" setting). GitHub ALLOWS the delete but then refuses the
+          #    tag name forever ("tag_name was used by an immutable release"),
+          #    so deleting would erase this submission's record for good; seen
+          #    live on a regrade 2026-09-12. Check before touching it.
+          # 2. An org ruleset rejects the delete with HTTP 422/403 (seen live
+          #    2026-08-07). gh's exit codes can't reliably distinguish that from
+          #    a transient error, so re-check existence: if the release is STILL
+          #    there, treat it as immutable-blocked; if it's GONE (a race removed
+          #    it), proceed to create as usual.
+          KEPT_MSG="cannot be refreshed; the regraded score is in the commit status and the job summary, but gradebook collection keeps reading the OLD release's result.json for this submission (GitHub's rule, not ours)"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # A failed probe answers "" and is treated as immutable: guessing
+            # wrong the other way destroys the record for good. The tag is a
+            # student-chosen ref name, so it is percent-encoded for the raw API
+            # path (a `#` or `%` in it would otherwise make the probe miss the
+            # release `gh release view` just found and keep it forever).
+            ENCODED_TAG="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$TAG")"
+            IMMUTABLE="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${ENCODED_TAG}" --jq '.immutable' 2>/dev/null || true)"
+            if [[ "$IMMUTABLE" == "true" ]]; then
+              echo "::warning::the release at $TAG is immutable and $KEPT_MSG"
+              exit 0
+            elif [[ "$IMMUTABLE" != "false" && "$IMMUTABLE" != "null" ]]; then
+              echo "::warning::the release at $TAG could not be checked for immutability, so it is kept as is; it $KEPT_MSG"
+              exit 0
+            fi
             if ! DELETE_ERR="$(gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes 2>&1)"; then
               if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
                 echo "$DELETE_ERR"
-                echo "::warning::the release at $TAG is immutable (org ruleset) and cannot be refreshed; the regraded score is in the commit status and the job summary, but gradebook collection keeps reading the OLD release's result.json for this submission (GitHub's rule, not ours)"
+                echo "::warning::the release at $TAG is immutable (org ruleset) and $KEPT_MSG"
                 exit 0
               fi
               # Release vanished between delete and re-check: surface why the
