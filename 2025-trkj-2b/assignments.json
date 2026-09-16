@@ -29,7 +29,7 @@
     },
     {
       "slug": "laporan-3-middleware-dan-message-queue",
-      "name": "Laporan 3 - Middleware dan Message Queue",
+      "name": "Laporan 3 Middleware dan Message Queue",
       "mode": "individual",
       "autograder": "default",
       "feedback_pr": true,
