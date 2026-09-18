@@ -41,9 +41,9 @@
         "repo": "lab-report",
         "branch": "main"
       },
-      "due": "2026-09-23T16:23:00Z",
+      "due": "2026-09-18T11:18:00Z",
       "due_meta": {
-        "input": "2026-09-23T23:23:00",
+        "input": "2026-09-18T18:18:00",
         "zone": "Asia/Jakarta",
         "offset": "+07:00",
         "source": "auto-detected"
