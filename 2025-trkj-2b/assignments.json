@@ -51,6 +51,32 @@
       "grading": {
         "mode": "off"
       }
+    },
+    {
+      "slug": "laporan-5-security-integration",
+      "name": "Laporan 5 Security Integration",
+      "mode": "individual",
+      "autograder": "default",
+      "feedback_pr": true,
+      "no_autograder": true,
+      "copy_about": true,
+      "copy_topics": true,
+      "template": {
+        "owner": "tik-pnl",
+        "repo": "lab-report",
+        "branch": "main"
+      },
+      "due": "2026-09-29T20:30:00Z",
+      "due_meta": {
+        "input": "2026-09-30T03:30:00",
+        "zone": "Asia/Jakarta",
+        "offset": "+07:00",
+        "source": "auto-detected"
+      },
+      "grading": {
+        "mode": "manual",
+        "max_points": 100
+      }
     }
   ]
 }
