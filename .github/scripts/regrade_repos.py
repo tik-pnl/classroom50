@@ -107,6 +107,12 @@ RATE_LIMIT_BODY_MARKERS = (
     "rate limit exceeded",
     "abuse",
 )
+# Rerun-endpoint 403 bodies, lower-cased substrings. Run-side: "This workflow
+# is already running", "Unable to retry this workflow run because it was
+# created over a month ago". Token-side: "Resource not accessible by personal
+# access token" (or "by integration"), "Must have admin rights to Repository".
+RERUN_REFUSED_FOR_RUN_MARKERS = ("already running", "created over a month ago")
+RERUN_REFUSED_FOR_TOKEN_MARKERS = ("not accessible", "must have", "permission", "bad credentials")
 MAX_RETRY_SLEEP_SECONDS = 60
 TRANSIENT_RETRY_CAP_SECONDS = 30
 MAX_TOTAL_THROTTLE_SLEEP_SECONDS = 300
@@ -418,8 +424,10 @@ AUTOGRADE_SHIM_PATH = f".github/workflows/{AUTOGRADE_WORKFLOW}"
 # Subject of the commit that adds the shim to a repo accepted while the
 # built-in autograder was off (`gh teacher assignment enable-autograder` / the
 # gradebook's "Add autograding workflow"). Every commit beneath it predates the
-# workflow, so no tag there can fire. Hand-mirrored with
-# contract.ShimBackfillCommitMessage and the web SHIM_BACKFILL_COMMIT_MESSAGE.
+# workflow, so no tag there can fire, and a marker it introduced is not an
+# accept (acceptance_commit_sha). Mirrors contract.ShimBackfillCommitSubject and
+# the runner.py / collect_scores.py constant of the same name; keep
+# byte-identical.
 SHIM_BACKFILL_COMMIT_SUBJECT = "[Classroom 50] Add autograde workflow (enable-autograder)"
 
 
@@ -713,25 +721,30 @@ def rerun_workflow_run(
     """Re-run a completed workflow run via the Actions rerun API. Replays at
     the same commit; runtime-fetched resources (runner.py and the autograder
     bundle, both from Pages at grade time) are re-fetched, so a teacher's updated
-    autograder takes effect. A 403 (not re-runnable, e.g., still in progress) is
-    surfaced as a per-repo skip by the caller, not a hard auth failure, so one
-    un-rerunnable repo doesn't abort the run."""
+    autograder takes effect."""
     url = f"{_repo_url(api_url, org, repo)}/actions/runs/{run_id}/rerun"
     try:
         _http_request("POST", url, token, body=b"{}", accept="application/vnd.github+json")
     except urllib.error.HTTPError as exc:
-        # A plain 403 here means "this run can't be re-run right now" (in
-        # progress, or too old), a benign per-repo skip. The throttle check
-        # comes FIRST: GitHub returns a rate limit as 403 too, and swallowing
-        # that one as "not re-runnable" would exit green on an incomplete
-        # regrade while the fan-out keeps hammering an active limiter.
-        if exc.code == 403 and classify(exc) is not THROTTLED:
+        if exc.code != 403 or classify(exc) is THROTTLED:
+            raise
+        # One status, three causes; only the body tells them apart. A token that
+        # can list runs but not re-run them must not pass as a run that merely
+        # can't be re-run right now (#1051).
+        body = error_body_snippet(exc).lower()
+        if any(marker in body for marker in RERUN_REFUSED_FOR_RUN_MARKERS):
             emit_warning(
                 f"{org}/{repo}: latest autograde run {run_id} can't be re-run "
-                f"right now (in progress or expired); skipping"
+                f"right now{body_note(exc)}; skipping"
             )
             raise _SkipRepo() from exc
-        raise
+        if any(marker in body for marker in RERUN_REFUSED_FOR_TOKEN_MARKERS):
+            raise  # main() classifies it FATAL and prints the rotate-token advice
+        raise _RepoFailed(
+            f"{org}/{repo}: GitHub refused to re-run autograde run {run_id} "
+            f"(HTTP 403){body_note(exc)}. Open the run on GitHub to see why, "
+            f"then regrade again."
+        ) from exc
 
 
 class _SkipRepo(Exception):
@@ -799,7 +812,7 @@ def first_gradeable_commit(
             return None
         meta = commit.get("commit")
         message = meta.get("message") if isinstance(meta, dict) else None
-        if isinstance(message, str) and _commit_subject(message) == SHIM_BACKFILL_COMMIT_SUBJECT:
+        if isinstance(message, str) and is_shim_backfill_commit(message):
             raise _RepoFailed(
                 f"{org}/{repo}: can't grade the work pushed before commit {sha[:7]}: "
                 f"the autograde workflow was added to this repository after it "
@@ -818,6 +831,13 @@ def _commit_subject(message: str) -> str:
     """A commit message's first line, trimmed (mirrors collect_scores.py)."""
     newline = message.find("\n")
     return (message if newline == -1 else message[:newline]).strip()
+
+
+def is_shim_backfill_commit(message: str) -> bool:
+    """Whether a commit is the enable-autograder backfill's: subject compared
+    exactly after trimming, body ignored. Mirrors collect_scores.py and
+    contract.IsShimBackfillCommit; pinned by baseline_source_cases.json."""
+    return _commit_subject(message) == SHIM_BACKFILL_COMMIT_SUBJECT
 
 
 def has_ci_skip_marker(message: str) -> bool:
@@ -855,13 +875,22 @@ def acceptance_commit_sha(
 ) -> str | None:
     """The acceptance commit: the oldest commit on `branch` touching the accept
     marker (nothing touches it before accept creates it). None when the marker
-    has no history on the branch, so the caller doesn't stop the walk. One page
-    deep: more than 100 marker rewrites on one repo is out of scope."""
+    has no history on the branch, so the caller doesn't stop the walk. Also
+    None when the enable-autograder backfill introduced the marker: that repo
+    was accepted without one (no_autograder), so the backfill is not an accept
+    sentinel; the walk in first_gradeable_commit must reach it and fail red
+    instead of reporting "no submission". Mirrors collect_scores.marker_baseline.
+    One page deep: more than 100 marker rewrites on one repo is out of scope."""
     commits = list_branch_commits(api_url, org, repo, token, branch, path=ACCEPT_MARKER_PATH)
     for commit in reversed(commits):
         sha = commit.get("sha") if isinstance(commit, dict) else None
-        if isinstance(sha, str) and sha:
-            return sha
+        if not isinstance(sha, str) or not sha:
+            continue
+        meta = commit.get("commit")
+        message = meta.get("message") if isinstance(meta, dict) else None
+        if isinstance(message, str) and is_shim_backfill_commit(message):
+            return None
+        return sha
     return None
 
 

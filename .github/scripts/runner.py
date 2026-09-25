@@ -111,9 +111,10 @@ MAX_CAPTURED_CHARS = 2000
 MAX_LOG_CAPTURED_CHARS = 100_000
 
 # Per-test failure-detail levels -- mirror tests.go / tests-v1.schema.json.
-# full: io tests show a diff (exact) or expected+actual blocks plus stderr;
-# run/python tests show the command's combined output (the default).
-# actual-only: the student's own output, never the expected side or a diff.
+# full: io tests show the input, then a diff (exact) or expected+actual
+# blocks, plus stderr; run/python tests show the command's combined output
+# (the default).
+# actual-only: the student's own output; no input, expected output, or diff.
 # none: just the failure-kind summary line.
 FAILURE_DETAILS_FULL = "full"
 FAILURE_DETAILS_ACTUAL_ONLY = "actual-only"
@@ -153,15 +154,16 @@ FETCH_ATTEMPTS = 3
 # test suites and bounds a hostile asset.
 MAX_FETCH_BYTES = 10 * 1024 * 1024
 
-# The accept commit creates the repo's `.classroom50.yaml`. Resolving the
-# baseline from this structural marker (not the commit subject) is stable
-# across clients/rewording and removes the subject-reuse spoof. The baseline
-# still can't be moved *forward* (to hide pre-baseline work) only because the
-# default-branch force-push/delete ruleset protects the accept commit -- on a
-# plan that rejects org rulesets that protection silently doesn't apply, so
-# this is a robustness win over subject-matching, not a guarantee. Path mirrors
-# classroomcfg.MetadataPath (cli/gh-student/internal/classroomcfg/metadata.go)
-# -- keep in lockstep.
+# The accept commit creates the repo's `.classroom50.yaml`; a no_autograder
+# accept creates nothing and the root commit is that shape's baseline.
+# Resolving the baseline from this structural marker is stable across
+# clients/rewording and removes the subject-reuse spoof (the one subject that
+# still matters is SHIM_BACKFILL_COMMIT_SUBJECT, below). The baseline still
+# can't be moved *forward* only because the default-branch force-push/delete
+# ruleset protects the accept commit; on a plan that rejects org rulesets that
+# protection silently doesn't apply, so this is a robustness win, not a
+# guarantee. Path mirrors classroomcfg.MetadataPath
+# (cli/gh-student/internal/classroomcfg/metadata.go) -- keep in lockstep.
 ACCEPT_MARKER_PATH = ".classroom50.yaml"
 
 # Full set of paths the accept commit lands atomically in one Tree commit.
@@ -181,7 +183,7 @@ ACCEPT_COMMIT_PATHS = frozenset(
 # creates the repo with auto_init, which seeds a README the assignment contract
 # says must not exist, so the same commit removes it. Both accept clients
 # hand-mirror the path: classroomcfg.SeededReadmePath (gh-student) and the
-# init_shim deletePaths in web/src/domain/assignments/accept.ts -- keep in
+# init_shim deletePaths in web/src/domain/assignments/acceptSteps.ts -- keep in
 # lockstep. Deletion-only, so a tip accept commit that ADDS or EDITS a README
 # (a student's amended work) still grades.
 ACCEPT_COMMIT_DELETED_PATHS = frozenset({"README.md"})
@@ -193,13 +195,28 @@ ACCEPT_COMMIT_DELETED_PATHS = frozenset({"README.md"})
 # lockstep with classroomcfg.AutogradeWorkflowPath.
 SHIM_UPDATE_COMMIT_PATHS = frozenset({".github/workflows/autograde.yaml"})
 
+# The subject of the teacher-side backfill that adds the shim (and, for a repo
+# accepted without one, the marker) after the built-in autograder is turned on.
+# Such a repo was accepted without a marker, so its baseline is the ROOT
+# commit, and a marker this commit introduced must not move it: a Feedback PR
+# frozen at the root would otherwise mismatch the runner's baseline for the
+# repo's whole life. Mirrors contract.ShimBackfillCommitSubject (the first line
+# of ShimBackfillCommitMessage / the web SHIM_BACKFILL_COMMIT_MESSAGE) and the
+# constant of the same name in collect_scores.py and regrade_repos.py; keep
+# byte-identical.
+SHIM_BACKFILL_COMMIT_SUBJECT = "[Classroom 50] Add autograde workflow (enable-autograder)"
+
 # `_baseline_scan` source discriminator. SOURCE_OPENABLE yields a usable
 # Feedback PR base (accept commit or root fallback); the others skip.
 SOURCE_ACCEPT = "accept"
 SOURCE_ROOT = "root"
+# The root commit of a repo accepted without a marker (no_autograder) whose
+# marker the enable-autograder backfill later added: a trusted baseline, unlike
+# SOURCE_ROOT, so it must not raise the untrusted-baseline warning.
+SOURCE_ROOT_BACKFILL = "root-backfill"
 SOURCE_GIT_ERROR = "git-error"
 SOURCE_NONE = "none"
-SOURCE_OPENABLE = (SOURCE_ACCEPT, SOURCE_ROOT)
+SOURCE_OPENABLE = (SOURCE_ACCEPT, SOURCE_ROOT, SOURCE_ROOT_BACKFILL)
 
 # Control paths allowed_files enforcement never removes, even under a bare `*`.
 # Lockstep with submit.go's isControlPath, pinned from both sides by the shared
@@ -593,14 +610,19 @@ def _baseline_scan(workspace: pathlib.Path) -> tuple[str | None, str]:
 
     Returns (sha, source) where source is one of the SOURCE_* constants:
       - SOURCE_ACCEPT:    the commit that introduced `.classroom50.yaml`
-        (ACCEPT_MARKER_PATH). A trusted baseline.
-      - SOURCE_ROOT:      the repo's root commit (no commit added the marker)
-        -- a best-effort baseline.
+        (ACCEPT_MARKER_PATH) and touched only the accept setup paths. A
+        trusted baseline.
+      - SOURCE_ROOT:      the repo's root commit (no commit added the marker,
+        or the one that did also carried non-setup work) -- a best-effort
+        baseline.
+      - SOURCE_ROOT_BACKFILL: the root commit of a repo whose oldest
+        marker-adding commit is the enable-autograder backfill (accepted as
+        no_autograder). Trusted: the root IS that shape's baseline.
       - SOURCE_GIT_ERROR: git ran but failed (e.g., "dubious ownership" in a
         container, or an un-deepenable shallow clone). History might exist; we
         couldn't read it. Distinct from SOURCE_NONE so the caller warns right.
       - SOURCE_NONE:      no history to resolve -- git unavailable or not a repo.
-    sha is None for everything except SOURCE_ACCEPT / SOURCE_ROOT.
+    sha is None for everything except the SOURCE_OPENABLE sources.
     """
 
     def git(*args: str) -> subprocess.CompletedProcess[str]:
@@ -634,31 +656,52 @@ def _baseline_scan(workspace: pathlib.Path) -> tuple[str | None, str]:
             # credentials authenticate the fetch.
             if git("fetch", "--quiet", "--unshallow", "origin").returncode != 0:
                 return None, SOURCE_GIT_ERROR
-        # Earliest commit that ADDED the marker wins, so a later re-add (delete
-        # then restore) can't move the baseline forward and hide work from the
-        # review diff. --diff-filter=A selects additions, --reverse oldest-first,
-        # --first-parent stays on mainline. Run before the root-commit fallback.
+        # Earliest commit that ADDED the marker wins, so a later re-add can't
+        # move the baseline forward and hide work. %s rides along so the
+        # backfill's marker is recognized (see SHIM_BACKFILL_COMMIT_SUBJECT).
+        # Deliberately NOT --first-parent: when a student merge-pulls the
+        # teacher's backfill over unpushed work, first-parent attributes the
+        # addition to the merge commit, whose subject hides the backfill and
+        # would make the merge a bogus accept baseline.
         added = git(
-            "log", "--reverse", "--first-parent", "--diff-filter=A",
-            "--format=%H", "HEAD", "--", ACCEPT_MARKER_PATH,
+            "log", "--reverse", "--diff-filter=A",
+            "--format=%H%x00%s", "HEAD", "--", ACCEPT_MARKER_PATH,
         )
         # A failed marker query is history-unreadable, not "marker absent" --
         # SOURCE_GIT_ERROR so a transient git error doesn't degrade to root.
         if added.returncode != 0:
             return None, SOURCE_GIT_ERROR
+        backfilled = False
         for line in added.stdout.splitlines():
-            sha = line.strip()
-            if sha:
+            sha, _, subject = line.strip().partition("\x00")
+            if not sha:
+                continue
+            if subject.strip() == SHIM_BACKFILL_COMMIT_SUBJECT:
+                backfilled = True
+                break
+            # Trust the marker's adder only when it is a bare setup commit,
+            # the same path guard is_acceptance_commit applies. On a repo
+            # accepted without a marker (no_autograder) a student can commit
+            # their own .classroom50.yaml; when that commit also carries work
+            # it is not an accept, so the root stays the baseline and the
+            # untrusted warning tells the teacher. A marker-only student commit
+            # is indistinguishable by paths and stays the accepted residual.
+            entries = _commit_changed_paths(workspace, sha)
+            if entries is None:
+                return None, SOURCE_GIT_ERROR
+            if _paths_within(entries, ACCEPT_COMMIT_PATHS, ACCEPT_COMMIT_DELETED_PATHS):
                 return sha, SOURCE_ACCEPT
-        # No commit added the marker (hand-created repo): fall back to the root
-        # commit for the best-effort review link.
+            break
+        # No commit added the marker (hand-created repo, or a no_autograder
+        # accept later backfilled), or the one that did is not an accept: fall
+        # back to the root commit.
         log = git("log", "--reverse", "--first-parent", "--format=%H", "HEAD")
         if log.returncode != 0:
             return None, SOURCE_GIT_ERROR
         for line in log.stdout.splitlines():
             sha = line.strip()
             if sha:
-                return sha, SOURCE_ROOT
+                return sha, SOURCE_ROOT_BACKFILL if backfilled else SOURCE_ROOT
         return None, SOURCE_NONE
     except (OSError, subprocess.SubprocessError):
         return None, SOURCE_NONE
@@ -746,6 +789,29 @@ def _commit_touches_only(
     any git error or an empty path list, so a commit we can't fully inspect is
     treated as a submission rather than silently skipped.
     """
+    entries = _commit_changed_paths(workspace, head_sha)
+    if not entries:
+        return False
+    return _paths_within(entries, allowed, allowed_deletions)
+
+
+def _paths_within(
+    entries: list[tuple[str, str]],
+    allowed: frozenset[str],
+    allowed_deletions: frozenset[str],
+) -> bool:
+    return all(
+        path in allowed or (status == "D" and path in allowed_deletions)
+        for status, path in entries
+    )
+
+
+def _commit_changed_paths(
+    workspace: pathlib.Path, sha: str
+) -> list[tuple[str, str]] | None:
+    """(status, path) for every path `sha` changed vs its parent (root commit:
+    vs the empty tree). None when git failed or its output was malformed, so
+    callers can tell "couldn't inspect" from "touched nothing"."""
 
     def git(*args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -754,36 +820,29 @@ def _commit_touches_only(
         )
 
     try:
-        # Status + name of every path the commit changed vs its parent (root
-        # commit: vs the empty tree). -r recurses, --no-renames keeps paths
-        # literal (and statuses to A/M/D/T), -z NUL-delimits so unusual
-        # filenames survive: the stream alternates status, path, status, path.
+        # -r recurses, --no-renames keeps paths literal (and statuses to
+        # A/M/D/T), -z NUL-delimits so unusual filenames survive: the stream
+        # alternates status, path, status, path.
         changed = git(
             "show", "--no-renames", "--name-status", "--format=", "-r", "-z",
-            head_sha,
+            sha,
         )
         if changed.returncode != 0:
-            return False
+            return None
         fields = changed.stdout.split("\0")
         # Well-formed output is status/path pairs plus a trailing empty field,
         # so an even length means a dangling status. zip would silently drop
         # it, and a dropped entry errs toward a false skip, so treat it as
         # uninspectable instead.
         if len(fields) % 2 == 0:
-            return False
-        entries = [
+            return None
+        return [
             (status, path)
             for status, path in zip(fields[0::2], fields[1::2])
             if path
         ]
-        if not entries:
-            return False
-        return all(
-            path in allowed or (status == "D" and path in allowed_deletions)
-            for status, path in entries
-        )
     except (OSError, subprocess.SubprocessError):
-        return False
+        return None
 
 
 def feedback_base_outcome(
@@ -793,8 +852,8 @@ def feedback_base_outcome(
     """(feedback-PR-base-sha, scan-source) for `main()`, which needs both the
     base AND the trust signal. Same (sha, source) as `_baseline_scan`, but
     forces a null sha for non-openable sources so the caller's gate is a simple
-    `sha is not None`: SOURCE_ACCEPT / SOURCE_ROOT open (root warns it's
-    untrusted), SOURCE_GIT_ERROR / SOURCE_NONE skip.
+    `sha is not None`: the SOURCE_OPENABLE sources open (only SOURCE_ROOT warns
+    it's untrusted), SOURCE_GIT_ERROR / SOURCE_NONE skip.
 
     A reviewable diff against the root commit beats no Feedback PR at all, and
     the untrusted-baseline warning tells the teacher to verify.
@@ -1336,19 +1395,21 @@ def no_baseline_warning(source: str = SOURCE_NONE) -> str:
 
 def untrusted_baseline_warning() -> str:
     """GitHub workflow annotation when the Feedback PR opens against the repo's
-    root commit instead of the trusted accept commit (no commit detected adding
-    `.classroom50.yaml`). The PR is still useful; the teacher gets a heads-up
-    that the frozen base may include starter/plumbing work, so the diff could
-    be larger than usual.
+    root commit instead of the trusted accept commit (no commit added
+    `.classroom50.yaml`, or the one that did also carried non-setup work). The
+    PR is still useful; the teacher gets a heads-up that the frozen base may
+    include starter/plumbing work, so the diff could be larger than usual.
 
     A `::warning::` annotation (not a plain log) so it shows in the run summary.
     Pure helper for the same testability reason as `no_baseline_warning`."""
     return (
         "::warning title=classroom50 Feedback PR::opened the Feedback PR "
-        f"against the repo's root commit -- no commit was detected as adding "
-        f"{ACCEPT_MARKER_PATH}, so this baseline is UNTRUSTED and the review "
-        "diff may include starter/plumbing files. Verify the repo was created "
-        "by an accept flow if the diff looks larger than expected."
+        f"against the repo's root commit. No commit added {ACCEPT_MARKER_PATH} "
+        "on its own (either none added it, or the one that did also carried "
+        "other files), so this baseline is UNTRUSTED and the review diff may "
+        "include starter or plumbing files. If the diff looks larger than "
+        "expected, check that an accept flow created the repo and that nothing "
+        "else was committed alongside the marker."
     )
 
 
@@ -1685,8 +1746,8 @@ def _make_outcome(name: str, points: int, passed: bool, detail: str,
     fields stripped before result.json: a `detail` summary line (the failure
     kind -- safe under every failure-details level) and a `capture` dict of raw
     streams (`output` and `setup-output` for run/python tests, `stdout` /
-    `stderr` / `expected` for io tests) that the renderers clip and
-    policy-filter per surface."""
+    `stderr` plus `input` / `expected` on failure for io tests) that the
+    renderers clip and policy-filter per surface."""
     if score is None:
         score = points if passed else 0
     return {
@@ -1946,6 +2007,7 @@ def _execute_spec(spec: dict[str, Any], *, cwd: pathlib.Path,
         return _make_outcome(name, points, False, f"invalid regex in expected: {exc}")
     if not passed:
         capture["expected"] = expected
+        capture["input"] = stdin
     outcome = _make_outcome(name, points, passed,
                             f"exit {rp.returncode}; comparison={comparison}",
                             capture=capture)
@@ -2093,21 +2155,24 @@ def _command_lines(outcome: dict[str, Any], *, include_run: bool = True) -> str:
     return "\n".join(parts)
 
 
-def _setup_output_block(outcome: dict[str, Any], limit: int) -> str:
-    """The labelled `--- setup output ---` block of an outcome's setup command;
-    empty when it printed nothing."""
-    text = (outcome.get("capture") or {}).get("setup-output") or ""
-    if not text.strip():
+def _capture_block(cap: dict[str, str], key: str, label: str, limit: int,
+                   *, keep_blank: bool = False) -> str:
+    """One labelled `--- label ---` block of a captured stream, or empty when
+    the stream is blank. keep_blank still renders whitespace-only text: a
+    blank line of stdin is real test data."""
+    text = cap.get(key) or ""
+    if not text or (not keep_blank and not text.strip()):
         return ""
-    return f"--- setup output ---\n{_clip(text, limit)}"
+    return f"--- {label} ---\n{_clip(text, limit)}"
 
 
 def compose_detail(outcome: dict[str, Any], *, limit: int = MAX_CAPTURED_CHARS) -> str:
     """Failure text for one failing outcome, clipped to the surface's limit
     and honoring the test's failure-details level: `none` stops at the
     failure-kind summary line, `actual-only` adds only the student's own
-    streams, and `full` (the default) also shows the expected side. The
-    commands are prepended when the test opted in via show-command."""
+    streams, and `full` (the default) also shows the teacher's side (an io
+    test's input and expected output). The commands are prepended when the
+    test opted in via show-command."""
     level = outcome.get("failure-details") or FAILURE_DETAILS_FULL
     detail = (outcome.get("detail") or "").rstrip()
     if level == FAILURE_DETAILS_NONE:
@@ -2118,23 +2183,27 @@ def compose_detail(outcome: dict[str, Any], *, limit: int = MAX_CAPTURED_CHARS) 
     if commands:
         detail += f"\n{commands}"
     if kind == "setup":
-        block = _setup_output_block(outcome, limit)
+        block = _capture_block(cap, "setup-output", "setup output", limit)
         return detail + (f"\n{block}" if block else "")
     # A test that fails in its run phase skips the output section, so under
     # show-output the setup output rides along here instead of vanishing.
     if outcome.get("show-output"):
-        block = _setup_output_block(outcome, limit)
+        block = _capture_block(cap, "setup-output", "setup output", limit)
         if block:
             detail += f"\n{block}"
     if kind in ("cases", "exit"):
         # Safe at every failure-details level: these tests have no expected
         # side to redact.
-        out = cap.get("output") or ""
-        return detail + (f"\n--- output ---\n{_clip(out, limit)}" if out.strip() else "")
+        block = _capture_block(cap, "output", "output", limit)
+        return detail + (f"\n{block}" if block else "")
     if kind == "output":
         comparison = outcome.get("comparison") or ""
         stdout = cap.get("stdout") or ""
         if level == FAILURE_DETAILS_FULL:
+            # Input leads so a student can rerun the exact failing case (#1044).
+            block = _capture_block(cap, "input", "input", limit, keep_blank=True)
+            if block:
+                detail += f"\n{block}"
             # A line diff only makes sense against a full expected output, and
             # only for exact: for included/regex the expectation is a fragment
             # or pattern, so those keep the verbatim expected/actual blocks.
@@ -2152,12 +2221,13 @@ def compose_detail(outcome: dict[str, Any], *, limit: int = MAX_CAPTURED_CHARS) 
                            f"\n{_clip(cap.get('expected'), limit)}"
                            f"\n--- actual stdout ---\n{_clip(stdout, limit)}")
         else:
-            # actual-only: the diff and the expected block would both reveal
-            # the answer, so only the student's own stdout is shown.
+            # actual-only: the diff and the expected block would reveal the
+            # answer, and the input would reveal the hidden test case, so only
+            # the student's own stdout is shown.
             detail += f"\n--- actual stdout ---\n{_clip(stdout, limit)}"
-        stderr = cap.get("stderr") or ""
-        if stderr.strip():
-            detail += f"\n--- stderr ---\n{_clip(stderr, limit)}"
+        block = _capture_block(cap, "stderr", "stderr", limit)
+        if block:
+            detail += f"\n{block}"
         return detail
     # timeout / failed start / bad fixture / bad regex: the summary is all
     # there is (no process output was captured).
@@ -2175,9 +2245,9 @@ def compose_output(outcome: dict[str, Any], *, limit: int = MAX_CAPTURED_CHARS) 
                        ("output", "output"),
                        ("stdout", "stdout"),
                        ("stderr", "stderr")):
-        text = cap.get(key) or ""
-        if text.strip():
-            outputs.append(f"--- {label} ---\n{_clip(text, limit)}")
+        block = _capture_block(cap, key, label, limit)
+        if block:
+            outputs.append(block)
     if not outputs:
         outputs.append("(no output captured)")
     commands = _command_lines(outcome)
@@ -2242,6 +2312,16 @@ def _colorize(text: str, code: str, *, color: bool) -> str:
     return f"{code}{text}{ANSI_RESET}"
 
 
+def _colorize_diff_line(line: str, *, color: bool) -> str:
+    if line.startswith("+"):
+        return _colorize(line, ANSI_GREEN, color=color)
+    if line.startswith("-"):
+        return _colorize(line, ANSI_RED, color=color)
+    if line.startswith("@@"):
+        return _colorize(line, ANSI_CYAN, color=color)
+    return line
+
+
 def _strip_control_chars(text: str) -> str:
     """Drop ASCII control chars (incl. newlines) so a name can't inject a
     column-0 workflow command into the log report. Mirrors tests.go's
@@ -2283,13 +2363,17 @@ def render_log_report(outcomes: list[dict[str, Any]], *, color: bool) -> str:
         # way (mirrors the two-space indent that defends the detail lines).
         lines.append(f"::group::FAIL: {_strip_control_chars(o['test-name'])}")
         detail = compose_detail(o, limit=MAX_LOG_CAPTURED_CHARS)
+        # Color only the unified diff (its `--- expected` header up to the next
+        # block header): stdin or output starting with -/+ must not read as
+        # hunk lines.
+        in_diff = False
         for dl in detail.rstrip().splitlines():
-            if dl.startswith("+"):
-                dl = _colorize(dl, ANSI_GREEN, color=color)
-            elif dl.startswith("-"):
-                dl = _colorize(dl, ANSI_RED, color=color)
-            elif dl.startswith("@@"):
-                dl = _colorize(dl, ANSI_CYAN, color=color)
+            if dl == "--- expected":
+                in_diff = True
+            elif re.fullmatch(r"--- .+ ---", dl):
+                in_diff = False
+            if in_diff:
+                dl = _colorize_diff_line(dl, color=color)
             lines.append(f"  {dl}")
         lines.append("::endgroup::")
 
@@ -2723,8 +2807,9 @@ def main() -> int:
     # unconditionally and early so the step runs even when grading fails
     # (teachers review failing work too). The step is the gate: it opens the PR
     # only when the assignment opted in (feedback-pr) and there's a diff. The
-    # base is the accept commit when detected, else the root commit: a root
-    # fallback still opens the PR but warns it's UNTRUSTED; only an unresolvable
+    # base is the accept commit when detected, else the root commit; an
+    # untrusted root fallback (SOURCE_ROOT) warns, the backfill's root
+    # (SOURCE_ROOT_BACKFILL) is trusted and silent; only an unresolvable
     # baseline (git unreadable / not a repo) skips.
     fb_base_sha, fb_source = feedback_base_outcome(workspace, baseline_scan)
     append_sha_outputs(github_output, fb_base_sha, sha)
