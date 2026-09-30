@@ -77,6 +77,34 @@
         "mode": "manual",
         "max_points": 100
       }
+    },
+    {
+      "slug": "laporan-2-iot-integration",
+      "name": "Laporan 2 IoT Integration",
+      "mode": "team",
+      "autograder": "default",
+      "feedback_pr": true,
+      "no_autograder": true,
+      "copy_about": true,
+      "copy_topics": true,
+      "template": {
+        "owner": "tik-pnl",
+        "repo": "lab-report",
+        "branch": "main"
+      },
+      "due": "2026-09-30T18:01:00Z",
+      "due_meta": {
+        "input": "2026-10-01T01:01:00",
+        "zone": "Asia/Jakarta",
+        "offset": "+07:00",
+        "source": "auto-detected"
+      },
+      "max_group_size": 5,
+      "team_formation": "teacher",
+      "grading": {
+        "mode": "manual",
+        "max_points": 100
+      }
     }
   ]
 }
