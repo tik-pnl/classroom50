@@ -43,7 +43,9 @@
           "slug": "classroom50-group-a655fbe2dcce58a7-4",
           "id": 19801231,
           "name": "Group 4",
-          "members": [],
+          "members": [
+            "hafizdmuhammad419-sudo"
+          ],
           "formation": "teacher"
         }
       ]
