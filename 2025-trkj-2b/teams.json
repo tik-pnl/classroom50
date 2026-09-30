@@ -56,7 +56,10 @@
           "slug": "classroom50-group-a655fbe2dcce58a7-5",
           "id": 19802542,
           "name": "Group 5",
-          "members": [],
+          "members": [
+            "muhammadrezaulhak-lab",
+            "zamz73672-png"
+          ],
           "formation": "teacher"
         }
       ]
