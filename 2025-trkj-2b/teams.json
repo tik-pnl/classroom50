@@ -1,0 +1,16 @@
+{
+  "schema": "classroom50/teams/v1",
+  "assignments": {
+    "laporan-2-iot-integration": {
+      "teams": [
+        {
+          "slug": "classroom50-group-a655fbe2dcce58a7-1",
+          "id": 19800726,
+          "name": "Group 1",
+          "members": [],
+          "formation": "teacher"
+        }
+      ]
+    }
+  }
+}
