@@ -31,7 +31,9 @@
           "slug": "classroom50-group-a655fbe2dcce58a7-3",
           "id": 19801155,
           "name": "Group 3",
-          "members": [],
+          "members": [
+            "faizhul210-ctrl"
+          ],
           "formation": "teacher"
         }
       ]
