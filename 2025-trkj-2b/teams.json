@@ -9,6 +9,13 @@
           "name": "Group 1",
           "members": [],
           "formation": "teacher"
+        },
+        {
+          "slug": "classroom50-group-a655fbe2dcce58a7-2",
+          "id": 19800743,
+          "name": "Group 2",
+          "members": [],
+          "formation": "teacher"
         }
       ]
     }
