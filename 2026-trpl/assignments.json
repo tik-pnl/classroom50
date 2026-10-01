@@ -1,4 +1,25 @@
 {
   "schema": "classroom50/assignments/v1",
-  "assignments": []
+  "assignments": [
+    {
+      "slug": "tugas-bilangan",
+      "name": "Tugas Bilangan",
+      "mode": "individual",
+      "autograder": "default",
+      "feedback_pr": true,
+      "no_autograder": true,
+      "description": "Cari dan buatkan konversi antar bilangan berikut.\n1. Biner\n2. Desimal\n3. Oktal\n4. Hexadesimal",
+      "due": "2026-10-07T00:07:00Z",
+      "due_meta": {
+        "input": "2026-10-07T07:07:00",
+        "zone": "Asia/Jakarta",
+        "offset": "+07:00",
+        "source": "auto-detected"
+      },
+      "grading": {
+        "mode": "manual",
+        "max_points": 100
+      }
+    }
+  ]
 }
