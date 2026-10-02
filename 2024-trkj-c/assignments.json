@@ -85,7 +85,7 @@
       "mode": "individual",
       "autograder": "default",
       "feedback_pr": false,
-      "empty_repo": true,
+      "init_shim": true,
       "description": "Tugas dikerjakan masing-masing dan dikumpulkan dalam bentuk project laravel",
       "due": "2026-10-09T02:09:00Z",
       "due_meta": {
@@ -95,7 +95,8 @@
         "source": "auto-detected"
       },
       "grading": {
-        "mode": "off"
+        "mode": "manual",
+        "max_points": 100
       }
     }
   ]
