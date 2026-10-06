@@ -78,6 +78,26 @@
         "mode": "manual",
         "max_points": 100
       }
+    },
+    {
+      "slug": "tugas-restful-api-crud-dosen",
+      "name": "Tugas Restful API CRUD Dosen",
+      "mode": "individual",
+      "autograder": "default",
+      "feedback_pr": false,
+      "init_shim": true,
+      "description": "Tugas dikerjakan masing-masing dan dikumpulkan dalam bentuk project laravel",
+      "due": "2026-10-09T02:09:00Z",
+      "due_meta": {
+        "input": "2026-10-09T09:09:00",
+        "zone": "Asia/Jakarta",
+        "offset": "+07:00",
+        "source": "auto-detected"
+      },
+      "grading": {
+        "mode": "manual",
+        "max_points": 100
+      }
     }
   ]
 }
