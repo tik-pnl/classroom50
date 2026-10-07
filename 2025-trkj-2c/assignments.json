@@ -1,4 +1,32 @@
 {
   "schema": "classroom50/assignments/v1",
-  "assignments": []
+  "assignments": [
+    {
+      "slug": "laporan-local-style",
+      "name": "Laporan Local Style",
+      "mode": "team",
+      "autograder": "default",
+      "feedback_pr": true,
+      "copy_about": true,
+      "copy_topics": true,
+      "template": {
+        "owner": "tik-pnl",
+        "repo": "lab-report",
+        "branch": "main"
+      },
+      "due": "2026-10-14T07:14:00Z",
+      "due_meta": {
+        "input": "2026-10-14T14:14:00",
+        "zone": "Asia/Jakarta",
+        "offset": "+07:00",
+        "source": "auto-detected"
+      },
+      "max_group_size": 5,
+      "team_formation": "teacher",
+      "grading": {
+        "mode": "manual",
+        "max_points": 100
+      }
+    }
+  ]
 }
