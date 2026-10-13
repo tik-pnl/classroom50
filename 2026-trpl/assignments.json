@@ -20,6 +20,26 @@
         "mode": "manual",
         "max_points": 100
       }
+    },
+    {
+      "slug": "tugas-protokol",
+      "name": "Tugas Protokol",
+      "mode": "individual",
+      "autograder": "default",
+      "feedback_pr": false,
+      "empty_repo": true,
+      "description": "Diketahui sebuah lembaga pendidikan dengan fokus pendidikan Teknologi Informasi memiliki sebuah ruang komputer yang terdiri atas beberapa komputer untuk keperluan praktikum dan sebuah ruang admin sebagai kantor para administrator dan tempat meletakkan server.\nTugas:\n1. Sebutkan beberapa nama aplikasi berbasis internet yang dapat digunakan di lembaga ini untuk mendukung proses pembelajaran.\n2. Sebutkan application layer protocol yang digunakan oleh aplikasi-aplikasi tersebut.",
+      "due": "2026-10-20T13:20:00Z",
+      "due_meta": {
+        "input": "2026-10-20T20:20:00",
+        "zone": "Asia/Jakarta",
+        "offset": "+07:00",
+        "source": "auto-detected"
+      },
+      "grading": {
+        "mode": "manual",
+        "max_points": 100
+      }
     }
   ]
 }
