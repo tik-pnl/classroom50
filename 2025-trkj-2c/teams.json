@@ -67,6 +67,32 @@
           "formation": "teacher"
         }
       ]
+    },
+    "tugas-design-thinking": {
+      "teams": [
+        {
+          "slug": "classroom50-group-6976e959280f0e69-1",
+          "id": 20088853,
+          "members": [
+            "SALMA06-ux"
+          ],
+          "formation": "student"
+        },
+        {
+          "slug": "classroom50-group-6976e959280f0e69-2",
+          "id": 20089713,
+          "members": [],
+          "formation": "student"
+        },
+        {
+          "slug": "classroom50-group-6976e959280f0e69-3",
+          "id": 20089742,
+          "members": [
+            "hidayat0906"
+          ],
+          "formation": "student"
+        }
+      ]
     }
   }
 }
