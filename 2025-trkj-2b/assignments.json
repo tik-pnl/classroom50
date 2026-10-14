@@ -105,6 +105,32 @@
         "mode": "manual",
         "max_points": 100
       }
+    },
+    {
+      "slug": "laporan-6-monitoring-visualization",
+      "name": "Laporan 6 Monitoring & Visualization",
+      "mode": "individual",
+      "autograder": "default",
+      "feedback_pr": true,
+      "no_autograder": true,
+      "copy_about": true,
+      "copy_topics": true,
+      "template": {
+        "owner": "tik-pnl",
+        "repo": "lab-report",
+        "branch": "main"
+      },
+      "due": "2026-10-21T14:21:00Z",
+      "due_meta": {
+        "input": "2026-10-21T21:21:00",
+        "zone": "Asia/Jakarta",
+        "offset": "+07:00",
+        "source": "auto-detected"
+      },
+      "grading": {
+        "mode": "manual",
+        "max_points": 100
+      }
     }
   ]
 }
