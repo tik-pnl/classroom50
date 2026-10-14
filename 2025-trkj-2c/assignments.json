@@ -27,6 +27,34 @@
         "mode": "manual",
         "max_points": 100
       }
+    },
+    {
+      "slug": "tugas-design-thinking",
+      "name": "Tugas Design Thinking",
+      "mode": "team",
+      "autograder": "default",
+      "feedback_pr": true,
+      "no_autograder": true,
+      "copy_about": true,
+      "copy_topics": true,
+      "template": {
+        "owner": "tik-pnl",
+        "repo": "tugas-uix",
+        "branch": "main"
+      },
+      "due": "2026-10-21T14:21:00Z",
+      "due_meta": {
+        "input": "2026-10-21T21:21:00",
+        "zone": "Asia/Jakarta",
+        "offset": "+07:00",
+        "source": "auto-detected"
+      },
+      "max_group_size": 5,
+      "team_formation": "student",
+      "grading": {
+        "mode": "manual",
+        "max_points": 100
+      }
     }
   ]
 }
