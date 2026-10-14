@@ -73,9 +73,7 @@
         {
           "slug": "classroom50-group-6976e959280f0e69-1",
           "id": 20088853,
-          "members": [
-            "SALMA06-ux"
-          ],
+          "members": [],
           "formation": "student"
         },
         {
@@ -90,6 +88,15 @@
           "members": [
             "hidayat0906",
             "keisyaaldira"
+          ],
+          "formation": "student"
+        },
+        {
+          "slug": "classroom50-group-6976e959280f0e69-4",
+          "id": 20089979,
+          "name": "Group 4",
+          "members": [
+            "fairuzsyifa18"
           ],
           "formation": "student"
         }
