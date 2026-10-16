@@ -122,7 +122,8 @@
         "source": "auto-detected"
       },
       "grading": {
-        "mode": "off"
+        "mode": "manual",
+        "max_points": 100
       }
     }
   ]
