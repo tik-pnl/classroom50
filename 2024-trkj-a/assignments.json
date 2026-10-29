@@ -113,9 +113,9 @@
         "branch": "main"
       },
       "description": "Laporan tentang Inisialisasi Proyek Next.js & Integrasi API Autentikasi (Login)",
-      "due": "2026-10-17T10:17:00Z",
+      "due": "2026-11-01T19:02:00Z",
       "due_meta": {
-        "input": "2026-10-17T17:17:00",
+        "input": "2026-11-02T02:02:00",
         "zone": "Asia/Jakarta",
         "offset": "+07:00",
         "source": "auto-detected"
