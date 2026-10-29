@@ -97,6 +97,33 @@
         "mode": "manual",
         "max_points": 100
       }
+    },
+    {
+      "slug": "laporan-integrasi-api-login",
+      "name": "Laporan Integrasi API Login",
+      "mode": "individual",
+      "autograder": "default",
+      "feedback_pr": true,
+      "no_autograder": true,
+      "copy_about": true,
+      "copy_topics": true,
+      "template": {
+        "owner": "tik-pnl",
+        "repo": "lab-report",
+        "branch": "main"
+      },
+      "description": "Laporan tentang Inisialisasi Proyek Next.js & Integrasi API Autentikasi (Login)",
+      "due": "2026-10-17T10:17:00Z",
+      "due_meta": {
+        "input": "2026-10-17T17:17:00",
+        "zone": "Asia/Jakarta",
+        "offset": "+07:00",
+        "source": "auto-detected"
+      },
+      "grading": {
+        "mode": "manual",
+        "max_points": 100
+      }
     }
   ]
 }
