@@ -151,6 +151,32 @@
         "mode": "manual",
         "max_points": 100
       }
+    },
+    {
+      "slug": "laporan-nested-layout-dan-implementasi-logout",
+      "name": "Laporan Nested Layout dan Implementasi Logout",
+      "mode": "individual",
+      "autograder": "default",
+      "feedback_pr": true,
+      "no_autograder": true,
+      "copy_about": true,
+      "copy_topics": true,
+      "template": {
+        "owner": "tik-pnl",
+        "repo": "lab-report",
+        "branch": "main"
+      },
+      "due": "2026-11-04T22:05:00Z",
+      "due_meta": {
+        "input": "2026-11-05T05:05:00",
+        "zone": "Asia/Jakarta",
+        "offset": "+07:00",
+        "source": "auto-detected"
+      },
+      "grading": {
+        "mode": "manual",
+        "max_points": 100
+      }
     }
   ]
 }
