@@ -157,6 +157,32 @@
         "mode": "manual",
         "max_points": 100
       }
+    },
+    {
+      "slug": "laporan-4-cloud-integration",
+      "name": "Laporan 4 Cloud Integration",
+      "mode": "individual",
+      "autograder": "default",
+      "feedback_pr": true,
+      "no_autograder": true,
+      "copy_about": true,
+      "copy_topics": true,
+      "template": {
+        "owner": "tik-pnl",
+        "repo": "lab-report",
+        "branch": "main"
+      },
+      "due": "2026-11-23T16:23:00Z",
+      "due_meta": {
+        "input": "2026-11-23T23:23:00",
+        "zone": "Asia/Jakarta",
+        "offset": "+07:00",
+        "source": "auto-detected"
+      },
+      "grading": {
+        "mode": "manual",
+        "max_points": 100
+      }
     }
   ]
 }
