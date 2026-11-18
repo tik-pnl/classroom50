@@ -79,7 +79,13 @@
         {
           "slug": "classroom50-group-6976e959280f0e69-2",
           "id": 20089713,
-          "members": [],
+          "members": [
+            "mmdubsyrnii",
+            "mufadhillahmufad",
+            "nadiatulhikmah20",
+            "fcriiakbar",
+            "Dapiii1"
+          ],
           "formation": "student"
         },
         {
@@ -87,6 +93,8 @@
           "id": 20089742,
           "members": [
             "hidayat0906",
+            "zsutan44-cloud",
+            "nadiaul2007",
             "keisyaaldira",
             "SALMA06-ux"
           ],
@@ -97,7 +105,32 @@
           "id": 20089979,
           "name": "Group 4",
           "members": [
-            "fairuzsyifa18"
+            "yaniss-sudo",
+            "shainaputriaulia-tech",
+            "fairuzsyifa18",
+            "dhiaulihsan777-boop"
+          ],
+          "formation": "student"
+        },
+        {
+          "slug": "classroom50-group-6976e959280f0e69-5",
+          "id": 20090203,
+          "name": "Grup 5",
+          "members": [
+            "abizarul",
+            "taqiyalthaf",
+            "qaisar-png",
+            "reyhanhann164-blip"
+          ],
+          "formation": "student"
+        },
+        {
+          "slug": "classroom50-group-6976e959280f0e69-6",
+          "id": 20302615,
+          "name": "Grup 1",
+          "members": [
+            "ramzishandyasyafiq",
+            "mhdkhairulazmylubis"
           ],
           "formation": "student"
         }
