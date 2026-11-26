@@ -184,9 +184,9 @@
       "autograder": "default",
       "feedback_pr": false,
       "empty_repo": true,
-      "due": "2026-11-18T11:18:00Z",
+      "due": "2026-12-01T19:02:00Z",
       "due_meta": {
-        "input": "2026-11-18T18:18:00",
+        "input": "2026-12-02T02:02:00",
         "zone": "Asia/Jakarta",
         "offset": "+07:00",
         "source": "auto-detected"
